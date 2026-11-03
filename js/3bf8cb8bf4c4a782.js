@@ -629,6 +629,8 @@
     fc.features.push(feat); st.fc = fc; st.drawn = true; st.base = 'cizim';
     if (feat.geometry.type !== 'Point') setDraw(null);
     $('#pf-srcw').hidden = true; warn([]); runFile(false);
+    // uzaktan konan noktaya yaklaşılır (paftası görünsün)
+    if (feat.geometry.type === 'Point' && api.map.getZoom() < 14) { var c = feat.geometry.coordinates; api.map.easeTo({ center: c, zoom: 15, duration: 1000 }); }
   });
   function setDraw(m) {
     drawer.setMode(m); $('#pf-drawhint').hidden = !m || m === 'Point';
@@ -809,7 +811,7 @@
     $('#pf-out').innerHTML = h.join(''); $('#pf-exp').hidden = false; fillScope();
     var v = $('#pf-mscale').value, sk = v === 'auto' ? '1000' : v, nm = r.scales.filter(function (s) { return s.scale === sk; })[0].sheets[0].name, nb = P.neighbors(nm), list = [nm];
     Object.keys(nb).forEach(function (k) { if (nb[k]) list.push(nb[k].name); });
-    drawSheets(list, [nm]);
+    drawSheets(list, [nm]); st.noktaPafta = nm;
     if (fit) { var b = P.sheetFeature(nm, datum()).geometry.coordinates[0]; var bb = api.bboxOf({ features: [{ geometry: { coordinates: [b] } }] }); api.fit(bb, 17); }
   }
   $('#pf-kbul').addEventListener('click', function () { try { st.point = readInputs(); runPoint(true); } catch (e) { err(e.message); } });
@@ -827,6 +829,11 @@
       var hucre = api.map.getLayer('pf-ag-fill') ? api.map.queryRenderedFeatures(e.point, { layers: ['pf-ag-fill'] })[0] : null;
       if (hucre && (st.mode === 'ad' || (st.mode === 'dosya' && st.fc))) { openName(hucre.properties.n); return; }
       noktaAc({ lat: e.lngLat.lat, lon: e.lngLat.lng }, false);
+      // Tıklanan noktanın paftasına yumuşakça yaklaşılır (uzaktan tıklanınca pafta görünmüyordu); zaten yakındaysa harita yerinde kalır
+      if (st.noktaPafta && api.map.getZoom() < 14) {
+        var bb = api.bboxOf({ features: [P.sheetFeature(st.noktaPafta, datum())] });
+        if (bb) api.map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, maxZoom: 16, duration: window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1200 });
+      }
     });
   });
   // Hızlı arama: pafta adı ya da koordinat (enlem boylam; ondalık ya da derece-dakika-saniye; seçili TM/UTM sisteminde Y X)
