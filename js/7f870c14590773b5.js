@@ -1122,10 +1122,10 @@
     if (f === 'xlsx') n.push({ iller: 'Sayfalar: Bilgi, İller (seçili yılın göstergeleri), Nüfus 2007–2025, Yaş ve cinsiyet (19 yaş grubu).', il: 'Sayfalar: Bilgi, Göstergeler, Yıllık seri 2007–2025, Yaş ve cinsiyet (19 yaş grubu).', ilin: 'Sayfalar: Bilgi, İlçeler (2024 ve 2025 nüfusu, merkez/köy, artış hızı, yoğunluk).', ilceler: 'Sayfalar: Bilgi, İlçeler (2024 ve 2025 nüfusu, merkez/köy, artış hızı, yoğunluk).', ilce: 'Sayfalar: Bilgi, İlçe (2024 ve 2025 nüfusu, merkez/köy, artış hızı, yoğunluk).' }[k]);
     if (f === 'csv') n.push((k === 'il' ? 'Yıllık seri tablosu. ' : '') + 'Ayraç noktalı virgül, ondalık virgül, UTF-8; Excel\'de doğrudan açılır.');
     if (k === 'mahalle') {
-      n.push(/shp|geojson|kml|dxf/.test(f) ? 'Sınırı olan birimler çokgen, yalnız konumu olanlar nokta olarak; konumu olmayanlar coğrafi biçimlerde yer almaz (tabloda vardır). ' + (f === 'dxf' ? 'DXF: 3° TM (TUREF) metre koordinatı, ad yazılı; mahalle ve köy ayrı katmanda.' : 'WGS84 (EPSG:4326).') : 'Bütün mahalle ve köyler; konum sütunları sınırlılarda çokgen içi temsil noktası, diğerlerinde OSM noktasıdır.');
+      n.push(/shp|geojson|kml|dxf/.test(f) ? 'Sınırı olan birimler çokgen, yalnız konumu olanlar nokta olarak; konumu olmayanlar coğrafi biçimlerde yer almaz (tabloda vardır). ' + (f === 'dxf' ? 'DXF: 3° TM (TUREF) metre koordinatı, ad yazılı; mahalle ve köy ayrı katmanda. Dilim orta meridyeni ve EPSG kodu BENIOKU.txt\'dedir.' : 'WGS84 (EPSG:4326).') : 'Bütün mahalle ve köyler; konum sütunları sınırlılarda çokgen içi temsil noktası, diğerlerinde OSM noktasıdır.');
       n.push('Atıf: "Kaynak: TÜİK, ADNKS 2025" ve "© OpenStreetMap katkıcıları (ODbL)".'); $('#nf-dlnot').textContent = n.join(' '); return;
     }
-    if (/shp|geojson|kml|dxf/.test(f)) n.push('Sınırlar OpenStreetMap kaynaklı, ' + (f === 'dxf' ? '3° TM (TUREF) metre koordinatı, ad yazılı. ' : 'WGS84 coğrafi koordinat (EPSG:4326). ') + (k === 'ilceler' ? 'Tüm ilçeler sade geometriyle (≈500 m) verilir; bir ilin ilçeleri ayrıntılı geometriyle (≈30 m) iner.' : 'Ayrıntılı geometri (≈30 m).') + ' Öznitelik adları ve anlamları BENIOKU.txt\'dedir.');
+    if (/shp|geojson|kml|dxf/.test(f)) n.push('Sınırlar OpenStreetMap kaynaklı, ' + (f === 'dxf' ? '3° TM (TUREF) metre koordinatı, ad yazılı; dilim orta meridyeni verinin ortasına göre seçilir ve BENIOKU.txt\'de yazılıdır. ' : 'WGS84 coğrafi koordinat (EPSG:4326). ') + (k === 'ilceler' ? 'Tüm ilçeler sade geometriyle (≈500 m) verilir; bir ilin ilçeleri ayrıntılı geometriyle (≈30 m) iner.' : 'Ayrıntılı geometri (≈30 m).') + ' Öznitelik adları ve anlamları BENIOKU.txt\'dedir.');
     n.push('Atıf: "Kaynak: TÜİK, ADNKS"' + (/shp|geojson|kml|dxf/.test(f) ? ' ve "© OpenStreetMap katkıcıları (ODbL)".' : '.'));
     $('#nf-dlnot').textContent = n.join(' ');
   }
@@ -1161,7 +1161,13 @@
     return [['Başlık', 'Değer'], ['Kaynak', k.kurum + ', ' + k.urun], ['TÜİK tabloları', Object.keys(k.tablolar).join(', ')], ['Portal', k.portal], ['Kullanım', k.kosul], ['Sınırlar', k.sinir], ['Artış hızı', k.artis_notu], ['Alan', k.alan_notu],
       ['Derleme', 'topografya.com.tr Türkiye Nüfus Haritası, veri sürümü ' + st.d.derleme + ' (' + SINIR.replace(/sinirlar\/?$/, '') + ')'], ['Sınır lisansı', 'Open Database License (ODbL) 1.0: https://opendatacommons.org/licenses/odbl/1-0/ · https://www.openstreetmap.org/copyright'], ['Atıf', 'Kaynak: TÜİK, Adrese Dayalı Nüfus Kayıt Sistemi; derleme: topografya.com.tr']];
   }
-  function benioku(t) { return 'Türkiye Nüfus Haritası verisi\r\n\r\n' + bilgi().slice(1).map(function (r) { return r[0] + ': ' + r[1]; }).join('\r\n') + '\r\n\r\nÖznitelikler\r\n' + t.bas.map(function (b, i) { return b + ': ' + t.basT[i]; }).join('\r\n') + '\r\n'; }
+  // Paketteki koordinat sistemi açıkça yazılır (DXF dosyası kendi içinde koordinat sistemi taşımaz; Codex canlı denetimi 6)
+  function crsNotu(crs) {
+    var S = window.TA.K.SYSTEMS[crs];
+    if (!S || S.kind === 'geo') return 'Koordinat sistemi: WGS84 coğrafi koordinat (enlem, boylam; EPSG:4326)\r\n';
+    return 'Koordinat sistemi: ' + S.label + ' (EPSG:' + S.epsg + ')\r\n  Datum: TUREF (ITRF96, GRS80 elipsoidi) · Projeksiyon: 3° dilimli Transversal Merkator\r\n  Dilim orta meridyeni: ' + S.cm + '° D · Ölçek katsayısı: 1 · Yalancı doğu (sağa değer): 500.000 m · Yalancı kuzey: 0\r\n  Birim: metre · DXF\'te X = sağa değer (Y), Y = yukarı değer (X)\r\n';
+  }
+  function benioku(t, crs) { return 'Türkiye Nüfus Haritası verisi\r\n\r\n' + (crs ? crsNotu(crs) + '\r\n' : '') + bilgi().slice(1).map(function (r) { return r[0] + ': ' + r[1]; }).join('\r\n') + '\r\n\r\nÖznitelikler\r\n' + t.bas.map(function (b, i) { return b + ': ' + t.basT[i]; }).join('\r\n') + '\r\n'; }
   function yillikSeri(o) {
     var bas = ['Yıl', 'Nüfus', 'Yıllık nüfus artış hızı (‰)', 'Ortanca yaş', 'Ortanca yaş, erkek', 'Ortanca yaş, kadın', '0–14 yaş oranı (%)', '65+ yaş oranı (%)', 'Toplam yaş bağımlılık oranı (%)', 'Çocuk bağımlılık oranı (%)', 'Yaşlı bağımlılık oranı (%)', 'Ortalama hanehalkı büyüklüğü', 'Cinsiyet oranı (100 kadına erkek)'];
     return [bas].concat(st.d.yillar.map(function (y, j) { return [y, o.nufus[j], o.artis[j], o.ortanca[0][j], o.ortanca[1][j], o.ortanca[2][j], o.yas014[j], o.yas65[j], o.bagimlilik[0][j], o.bagimlilik[1][j], o.bagimlilik[2][j], o.hanehalki && o.hanehalki[j], o.cins_orani[j]]; }));
@@ -1199,10 +1205,10 @@
       is = geo.then(function (fc) {
         var idx = {}; t.satir.forEach(function (r) { idx[ilceDuzey ? String(r[3]) : r[0]] = r; });
         var feats = fc.features.map(function (g) { var r = idx[ilceDuzey ? String(g.properties.osm_id) : g.properties.il_kodu]; if (!r) return null; var p = {}; t.bas.forEach(function (b, i) { p[b] = r[i]; }); p.kaynak = 'TÜİK ADNKS; sınır © OSM'; return { type: 'Feature', properties: p, geometry: g.geometry }; }).filter(Boolean);
-        var out = F.write({ type: 'FeatureCollection', features: feats }, 'geo-turef', yazOpt(f, feats, ilceDuzey ? 'ilce_adi' : 'il_adi', null, ilceDuzey ? 150 : 400), ad);
+        var yo = yazOpt(f, feats, ilceDuzey ? 'ilce_adi' : 'il_adi', null, ilceDuzey ? 150 : 400), out = F.write({ type: 'FeatureCollection', features: feats }, 'geo-turef', yo, ad);
         var files = {}, enc = new TextEncoder();
         if (f === 'shp') { files = F.unzip(out.data); } else files[out.name] = typeof out.data === 'string' ? enc.encode(out.data) : out.data;
-        files['BENIOKU.txt'] = enc.encode(benioku(t));
+        files['BENIOKU.txt'] = enc.encode(benioku(t, yo.crs));
         durum(''); U.download(ad + '_' + f + '.zip', F.zip(files));
       });
     }
@@ -1224,10 +1230,10 @@
     if (f === 'csv') { var cf = {}, e0 = new TextEncoder(); cf[ad + '.csv'] = e0.encode(U.csvRapor([t.basT].concat(t.satir))); cf['BENIOKU.txt'] = e0.encode(mb); return U.download(ad + '_csv.zip', F.zip(cf)); }
     var idx = {}; t.satir.forEach(function (r) { idx[r[3]] = r; });
     var feats = st.mah.features.filter(function (x) { return x.geometry; }).map(function (x) { var r = idx[x.properties.k], p = {}; t.bas.forEach(function (b, i) { p[b] = r[i]; }); p.kaynak = 'TÜİK ADNKS; konum © OSM'; return { type: 'Feature', properties: p, geometry: x.geometry }; });
-    var out = F.write({ type: 'FeatureCollection', features: feats }, 'geo-turef', yazOpt(f, feats, 'ad', 'tur', 20), ad);
+    var yo = yazOpt(f, feats, 'ad', 'tur', 20), out = F.write({ type: 'FeatureCollection', features: feats }, 'geo-turef', yo, ad);
     var files = {}, enc = new TextEncoder();
     if (f === 'shp') files = F.unzip(out.data); else files[out.name] = typeof out.data === 'string' ? enc.encode(out.data) : out.data;
-    files['BENIOKU.txt'] = enc.encode(mb);
+    files['BENIOKU.txt'] = enc.encode(crsNotu(yo.crs) + '\r\n' + mb);
     U.download(ad + '_' + f + '.zip', F.zip(files));
   }
 
