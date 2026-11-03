@@ -823,8 +823,10 @@
   }
   // Koordinat sekmesindeki noktayı "Dosya ya da çizim" listesine ekler (birden çok nokta birlikte işlenir ve indirilir)
   root.addEventListener('click', function (e) {
-    if (!e.target.closest || !e.target.closest('#pf-kekle') || !st.point) return;
-    var fc = st.fc || { type: 'FeatureCollection', features: [] }, g = st.point;
+    if (!e.target.closest || !e.target.closest('#pf-kekle')) return;
+    // Kutulardaki güncel koordinat eklenir (önceki sorgunun noktası değil; Codex 6. tur bulgusu)
+    var g; try { g = readInputs(); } catch (ex) { err(ex.message); return; }
+    st.point = g; var fc = st.fc || { type: 'FeatureCollection', features: [] };
     fc.features.push({ type: 'Feature', properties: { ad: 'Nokta ' + (noktaSay(fc) + 1) }, geometry: { type: 'Point', coordinates: [g.lon, g.lat] } });
     st.fc = fc; st.drawn = true; if (!st.base || st.base === 'ornek_parsel') st.base = 'noktalar';
     U.$('.subtabs[data-group="pf"]', root)._select('dosya');
