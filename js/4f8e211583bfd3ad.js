@@ -629,15 +629,17 @@
   // çizim
   var drawer = window.HARITA.drawer(api, function (feat) {
     var fc = st.fc || { type: 'FeatureCollection', features: [] }; // çizimler haritadaki parsellere eklenir
-    feat.properties = { ad: (feat.geometry.type === 'Polygon' ? 'Çizilen alan ' : feat.geometry.type === 'LineString' ? 'Çizilen çizgi ' : 'Çizilen nokta ') + (fc.features.length + 1) };
+    feat.properties = { ad: feat.geometry.type === 'Point' ? 'Nokta ' + (noktaSay(fc) + 1) : (feat.geometry.type === 'Polygon' ? 'Çizilen alan ' : 'Çizilen çizgi ') + (fc.features.length + 1) };
     fc.features.push(feat); st.fc = fc; st.drawn = true; st.base = 'cizim';
     if (feat.geometry.type !== 'Point') setDraw(null);
     $('#pf-srcw').hidden = true; warn([]); runFile(false);
     // uzaktan konan noktaya yaklaşılır (paftası görünsün)
     if (feat.geometry.type === 'Point' && api.map.getZoom() < 14) { var c = feat.geometry.coordinates; api.map.easeTo({ center: c, zoom: 15, duration: 1000 }); }
   });
+  function noktaSay(fc) { return fc ? fc.features.filter(function (f) { return f.geometry && f.geometry.type === 'Point'; }).length : 0; }
   function setDraw(m) {
-    drawer.setMode(m); $('#pf-drawhint').hidden = !m || m === 'Point';
+    drawer.setMode(m); $('#pf-drawhint').hidden = !m;
+    $('#pf-drawhint').textContent = m === 'Point' ? 'Haritaya dokundukça nokta eklenir; her noktanın paftaları aşağıda listelenir. Bitince Nokta ekle düğmesine yeniden basın.' : 'Köşelere tıklayın; bitirmek için ilk noktaya tıklayın ya da çift tıklayın (Enter). Esc iptal eder.';
     U.$$('[data-draw]', root).forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.draw === m ? 'true' : 'false'); });
   }
   U.$$('[data-draw]', root).forEach(function (b) { b.addEventListener('click', function () { if (st.mode !== 'dosya') return; setDraw(drawer.mode === b.dataset.draw ? null : b.dataset.draw); }); });
@@ -812,12 +814,22 @@
     if (a250) h.push('<tr><td class="m">1/250.000</td><td class="m">' + U.esc(a250.onek) + ' ' + U.copyBtn(a250.onek) + ' <span class="meta">(' + (a250.bugun ? 'bugün ' + U.esc(a250.bugun) + ' · ' : '') + a250.kapsam + ')</span></td><td></td><td></td></tr>');
     r.scales.forEach(function (s) { var x = s.sheets[0]; h.push('<tr><td class="m">' + s.label + '</td><td class="m">' + nameBtn(x.name) + ' ' + U.copyBtn(x.name) + '</td><td class="num">' + U.num(x.depth, 1) + ' m</td><td>' + (x.nearEdge ? '<span class="badge no">sınırda</span>' : '') + '</td></tr>'); });
     h.push('</tbody></table></div><p class="hint">Pafta çizgisine uzaklık, noktanın bulunduğu paftanın en yakın kenarına olan yaklaşık uzaklıktır. Konum belirsizliğinden küçükse nokta komşu paftada da olabilir.</p>');
+    h.push('<div class="actions"><button type="button" class="btn ghost sm" id="pf-kekle">+ Bu noktayı listeye ekle</button><span class="hint">Birden çok noktanın paftalarını birlikte görmek ve indirmek için' + (noktaSay(st.fc) ? ' (listede ' + noktaSay(st.fc) + ' nokta var)' : '') + '</span></div>');
     $('#pf-out').innerHTML = h.join(''); $('#pf-exp').hidden = false; fillScope();
     var v = $('#pf-mscale').value, sk = v === 'auto' ? '1000' : v, nm = r.scales.filter(function (s) { return s.scale === sk; })[0].sheets[0].name, nb = P.neighbors(nm), list = [nm];
     Object.keys(nb).forEach(function (k) { if (nb[k]) list.push(nb[k].name); });
     drawSheets(list, [nm]); st.noktaPafta = nm;
     if (fit) { var b = P.sheetFeature(nm, datum()).geometry.coordinates[0]; var bb = api.bboxOf({ features: [{ geometry: { coordinates: [b] } }] }); api.fit(bb, 17); }
   }
+  // Koordinat sekmesindeki noktayı "Dosya ya da çizim" listesine ekler (birden çok nokta birlikte işlenir ve indirilir)
+  root.addEventListener('click', function (e) {
+    if (!e.target.closest || !e.target.closest('#pf-kekle') || !st.point) return;
+    var fc = st.fc || { type: 'FeatureCollection', features: [] }, g = st.point;
+    fc.features.push({ type: 'Feature', properties: { ad: 'Nokta ' + (noktaSay(fc) + 1) }, geometry: { type: 'Point', coordinates: [g.lon, g.lat] } });
+    st.fc = fc; st.drawn = true; if (!st.base || st.base === 'ornek_parsel') st.base = 'noktalar';
+    U.$('.subtabs[data-group="pf"]', root)._select('dosya');
+    U.toast('Nokta listeye eklendi · ' + noktaSay(fc) + ' nokta. Haritaya dokunarak eklemeye devam etmek için Nokta ekle\'yi seçin.');
+  });
   $('#pf-kbul').addEventListener('click', function () { try { st.point = readInputs(); runPoint(true); } catch (e) { err(e.message); } });
   ['#pf-k1', '#pf-k2'].forEach(function (s) { $(s).addEventListener('keydown', function (e) { if (e.key === 'Enter') $('#pf-kbul').click(); }); });
   // Haritaya tıklama (çizim yokken): pafta adı görünümünde ya da yüklü dosyada bir pafta hücresine tıklanırsa o pafta açılır;
