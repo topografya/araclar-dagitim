@@ -251,7 +251,11 @@
       container: el, style: online ? { version: 8, sources: {}, layers: [bgLayer('#F2F1EC')] } : offlineStyle(),
       center: opts.center || [35.2, 39.1], zoom: opts.zoom || 5, attributionControl: false, preserveDrawingBuffer: !!opts.preserve, dragRotate: false, pitchWithRotate: false,
       // Türkiye'ye özgü tematik haritalar (nüfus, sınırlar): Türkiye ve yakın çevresi dışına kaydırılamaz (Kıbrıs ve komşu ülkelerin bir kısmı dahil; telefonda dikey ekranda bütün Türkiye sığsın diye kutu geniş)
-      maxBounds: opts.sinirla ? [[12.0, 24.0], [58.5, 52.0]] : undefined
+      maxBounds: opts.sinirla ? [[12.0, 24.0], [58.5, 52.0]] : undefined,
+      // Dokunmatik ekranda tek parmak sayfayı kaydırır, harita iki parmakla kayar (sayfada haritaya takılıp kalınmasın); dokunma, nokta koyma ve çizim tek parmakla çalışır.
+      // Fareli bilgisayarda davranış değişmez (tekerlekle yakınlaşma Ctrl istemez).
+      cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches),
+      locale: { 'CooperativeGesturesHandler.MobileHelpText': 'Haritayı kaydırmak için iki parmak kullanın', 'CooperativeGesturesHandler.WindowsHelpText': 'Yakınlaştırmak için Ctrl tuşuna basılı tutarak tekerleği çevirin', 'CooperativeGesturesHandler.MacHelpText': 'Yakınlaştırmak için ⌘ tuşuna basılı tutarak tekerleği çevirin' }
     });
     map.touchZoomRotate.disableRotation();
     // Türkiye görünümü: sabit yakınlaştırma yerine kutuya sığdırma (harita kutusunun boyuna göre tüm ülke görünür)
@@ -523,226 +527,151 @@
   window.HARITA = H;
 })();
 
-/* Arazi araçları ortak arayüz yardımcıları. window.ARAZI */
-(function () {
+
+/* Kazı–Dolgu Hacmi arayüzü */
+(window.TOOLS = window.TOOLS || {}).hacim = { init: function (root) {
   'use strict';
-  var A = {};
-  // Alan seçimi: [data-alan="cokgen"] çokgen çiz, [data-alan="gorunur"] görünür alan, [data-alan="temizle"].
-  // onSec({ ring: [[lon, lat]…] kapalı, bbox }) çağrılır.
-  A.alanSecici = function (api, root, onSec, opts) {
-    opts = opts || {};
-    var U = window.U, durum = { ring: null };
-    var dr = window.HARITA.drawer(api, function (f) {
-      basili(null); dr.setMode(null);
-      sec(f.geometry.coordinates[0]);
-    });
-    function basili(m) { U.$$('[data-alan]', root).forEach(function (b) { if (b.dataset.alan === 'cokgen') b.setAttribute('aria-pressed', m === 'cokgen' ? 'true' : 'false'); }); }
-    function sec(ring) {
-      var b = [Infinity, Infinity, -Infinity, -Infinity]; ring.forEach(function (c) { b[0] = Math.min(b[0], c[0]); b[1] = Math.min(b[1], c[1]); b[2] = Math.max(b[2], c[0]); b[3] = Math.max(b[3], c[1]); });
-      durum.ring = ring; durum.bbox = b;
-      api.setData('alan', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }] }, { fillOpacity: 0, width: 2, dash: [3, 2] });
-      onSec(durum);
-    }
-    U.$$('[data-alan]', root).forEach(function (b) {
-      b.addEventListener('click', function () {
-        var t = b.dataset.alan;
-        if (t === 'cokgen') { var acik = dr.mode === 'Polygon'; dr.setMode(acik ? null : 'Polygon'); basili(acik ? null : 'cokgen'); }
-        else if (t === 'gorunur') {
-          dr.setMode(null); basili(null);
-          var bb = api.map.getBounds(), w = bb.getWest(), s = bb.getSouth(), e = bb.getEast(), n = bb.getNorth();
-          // kenarlardan %4 içeri: seçim çerçevesi görünsün
-          var dx = (e - w) * 0.04, dy = (n - s) * 0.04; w += dx; e -= dx; s += dy; n -= dy;
-          sec([[w, s], [e, s], [e, n], [w, n], [w, s]]);
-        } else if (t === 'temizle') { dr.setMode(null); basili(null); durum.ring = null; api.remove('alan'); if (opts.onTemizle) opts.onTemizle(); }
-      });
-    });
-    durum.sec = sec; durum.drawer = dr;
-    return durum;
-  };
-  // Mozaik ızgarasından renkli görüntü (data URL). renk(k) → [r, g, b, a] ya da null (saydam)
-  A.resim = function (m, renk) {
-    var c = document.createElement('canvas'); c.width = m.w; c.height = m.h;
-    var x = c.getContext('2d'), im = x.createImageData(m.w, m.h), d = im.data;
-    for (var k = 0; k < m.w * m.h; k++) { var r = renk(k); if (!r) continue; d[k * 4] = r[0]; d[k * 4 + 1] = r[1]; d[k * 4 + 2] = r[2]; d[k * 4 + 3] = r[3] == null ? 255 : r[3]; }
-    x.putImageData(im, 0, 0);
-    return c.toDataURL('image/png');
-  };
-  A.hex = function (h) { var n = parseInt(h.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
-  // Alan için uygun 3° TM orta meridyeni
-  A.tmCm = function (lon) { var cms = window.TA.K.TM_CMS, b = cms[0]; cms.forEach(function (c) { if (Math.abs(lon - c) < Math.abs(lon - b)) b = c; }); return b; };
-  A.ilerleme = function (el) { window.DEMYUKLE.ilerleme = function (s) { el.textContent = 'Yükseklik verisi yükleniyor: ' + s.gelen + ' / ' + s.istenen + ' karo'; }; };
-  A.alanYaz = function (m2) { var U = window.U; return m2 >= 1e6 ? U.num(m2 / 1e6, 3) + ' km²' : U.num(m2 / 1e4, 2) + ' ha'; };
-  // Çokgen için en çok alan (km²): veri ~15 m piksel; büyük alanlarda yakınlık düşer, uyarı verilir
-  A.MAX_KM2 = 2500;
-  window.ARAZI = A;
-})();
-
-/* OpenStreetMap Veri İndirme arayüzü */
-(window.TOOLS = window.TOOLS || {}).osm = { init: function (root) {
-  'use strict';
-  var OS = window.TA.OSM, GD = window.TA.GD, K = window.TA.K, F = window.TA.F, U = window.U, AR = window.ARAZI, $ = function (s) { return U.$(s, root); };
-  // Kamuya açık, her projede (ticari dahil) kullanıma izin veren Overpass sunucuları; ilki yanıt vermezse ikincisi denenir.
-  // Ana sunucu (overpass-api.de) ticari kullanıma kapalı olduğu için kullanılmaz.
-  // Yurt dışı (Rusya) yedek sunucu kişisel veri aktarımı nedeniyle kaldırıldı (Claude denetimi D3-15; 27.10.2026 kararı)
-  var SUNUCULAR = [['Private.coffee', 'https://overpass.private.coffee/api/interpreter']];
-  var ILK_YANIT_SN = 45; // bu sürede yanıt başlamazsa sonraki sunucuya geçilir
-  var RENK = { bina: '#B5651D', yol: '#2B2B2B', demiryolu: '#6A4C93', su: '#3E7C8C', arazi: '#C9B27C', yesil: '#4E9A52', donati: '#B3261E', enerji: '#E0A100' };
-  var VARSAYILAN = { bina: 1, yol: 1, donati: 1 };
-  var api = window.HARITA.create($('#os-map'), { center: [32.854, 39.92], zoom: 14 });
-  // ortak bilgi kutusu: öğenin adı, türü ve ölçüleri
-  var KATAD = { bina: 'Bina', yol: 'Yol', demiryolu: 'Raylı sistem', su: 'Su', arazi: 'Arazi kullanımı', yesil: 'Park / spor alanı', donati: 'Donatı', enerji: 'Enerji hattı' };
-  api.ipucu(['donati', 'enerji', 'yol', 'demiryolu', 'bina', 'su', 'yesil', 'arazi'].reduce(function (a, id) { return a.concat(['os-' + id + '-pt', 'os-' + id + '-line', 'os-' + id + '-fill']); }, []), function (p) {
-    var tur = p.sinif || p.tur || p.kullanim || '', s = [];
-    if (p.kat) s.push(U.num(+p.kat, 0) + ' kat'); if (p.taban_m2) s.push('Taban: ' + U.num(+p.taban_m2, 0) + ' m²'); if (p.alan_m2) s.push('Alan: ' + U.num(+p.alan_m2, 0) + ' m²');
-    if (p.uzunluk_m) s.push('Uzunluk: ' + U.num(+p.uzunluk_m, 0) + ' m'); if (p.adres) s.push(p.adres);
-    return { ad: p.ad || tur || 'Adsız öğe', alt: p.ad ? tur : '', satirlar: s };
-  });
-  api.saydamlik(Object.keys(RENK).map(function (k) { return 'os-' + k; })); // tematik katman opaklığı
-  api.ekAtif('Veri: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap katkıcıları</a>, ODbL');
-  var st = { ring: null, km2: 0, veri: null, ozet: null, istek: null };
-  function err(m) { var e = $('#os-err'); e.textContent = m || ''; e.hidden = !m; }
-  // katman seçimi
-  $('#os-kat').insertAdjacentHTML('beforeend', OS.KATMANLAR.map(function (k) { return '<label><input type="checkbox" value="' + k.id + '"' + (VARSAYILAN[k.id] ? ' checked' : '') + '><i style="display:inline-block;width:10px;height:10px;background:' + RENK[k.id] + ';border:1px solid var(--text)"></i>' + k.ad + '</label>'; }).join(''));
-  function secili() { return U.$$('#os-kat input:checked', root).map(function (i) { return i.value; }); }
-  function sinir() { return secili().indexOf('bina') >= 0 ? 25 : 200; }
-  function alanDurum() {
-    var b = !!st.ring, ok = b && st.km2 <= sinir() && secili().length;
-    $('#os-getir').disabled = !ok;
-    $('#os-alan').textContent = b ? 'Seçilen alan: ' + U.num(st.km2, 2) + ' km²' + (st.km2 > sinir() ? ' · ' + (secili().indexOf('bina') >= 0 ? 'binalarla en çok 25 km²' : 'en çok 200 km²') + ' seçilebilir; alanı küçültün' + (secili().indexOf('bina') >= 0 ? ' ya da binaları çıkarın' : '') + '.' : '') : 'Alan seçilmedi. Binalarla en çok 25 km², binasız en çok 200 km² seçilebilir.';
-  }
-  $('#os-kat').addEventListener('change', alanDurum);
-  var secim = AR.alanSecici(api, root, function (d) { st.ring = d.ring; st.km2 = GD.polygonGeodesic(d.ring).area / 1e6; err(''); alanDurum(); }, { onTemizle: function () { st.ring = null; alanDurum(); } });
-  $('#os-ornek').addEventListener('click', function () {
-    api.ready.then(function () { api.map.jumpTo({ center: [32.854, 39.9205], zoom: 16 }); secim.sec([[32.849, 39.917], [32.859, 39.917], [32.859, 39.924], [32.849, 39.924], [32.849, 39.917]]); });
-  });
-  // koordinat sistemleri
-  var sel = $('#os-crs');
-  sel.add(new Option('Otomatik: ITRF96 3° TM (alana göre dilim)', 'auto'));
-  K.TM_CMS.forEach(function (c) { sel.add(new Option('ITRF96 3° TM ' + c, 'tm-turef-' + c)); });
-  K.UTM_ZONES.forEach(function (z) { sel.add(new Option('WGS84 UTM ' + z + 'K', 'utm-wgs84-' + z)); });
-  sel.add(new Option('WGS84 coğrafi (derece)', 'geo-turef'));
-  K.TM_CMS.forEach(function (c) { sel.add(new Option('ED50 3° TM ' + c + ' (bilgi amaçlı, ±2 m)', 'tm-ed50-' + c)); });
-  function notGuncelle() {
-    var f = $('#os-fmt').value; sel.disabled = f === 'kml' || f === 'geojson';
-    $('#os-not').textContent = { shp: 'Her katman ayrı Shapefile (UTF-8, .cpg ve .prj ile); alan, çizgi ve nokta türleri ayrı dosyalara yazılır.', dxf: 'Her veri katmanı ayrı CAD katmanında; yollar sınıfına göre alt katmanlara (YOL_KONUT_SOKAGI gibi) ayrılır.', geojson: 'GeoJSON standart gereği WGS84 coğrafi koordinatla yazılır.', kml: 'KML WGS84 coğrafi koordinatla yazılır; Google Earth\'te katmanlar ayrı görünür.', csv: 'Her katmanın öznitelik tablosu; alan ve çizgiler için ağırlık merkezi koordinatı eklenir.' }[f] + ' Pakete lisans notu (BENIOKU.txt) eklenir.';
-  }
-  $('#os-fmt').addEventListener('change', notGuncelle); notGuncelle();
-
-  // ---------- Sorgu ----------
-  $('#os-getir').addEventListener('click', function () {
-    var ids = secili(); if (!st.ring || !ids.length) return;
-    err(''); var q = OS.sorgu(ids, st.ring, 150), ac = new AbortController(); st.istek = ac;
-    $('#os-getir').disabled = true; $('#os-dur').hidden = false; $('#os-durum').textContent = 'OpenStreetMap verisi isteniyor…';
-    var t0 = Date.now(), kullanilan = null;
-    function dene(i) {
-      if (i >= SUNUCULAR.length) return Promise.reject(new Error('Overpass sunucuları şu anda yanıt vermiyor ya da yoğun. Biraz sonra yeniden deneyin ya da alanı küçültün.'));
-      var sv = SUNUCULAR[i], zaman = new AbortController(), iptal = function () { zaman.abort(); };
-      ac.signal.addEventListener('abort', iptal);
-      var sayac = setTimeout(function () { zaman.abort(); }, ILK_YANIT_SN * 1000);
-      $('#os-durum').textContent = 'OpenStreetMap verisi isteniyor (' + sv[0] + ')…';
-      return fetch(sv[1], { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, signal: zaman.signal })
-        .then(function (r) {
-          clearTimeout(sayac);
-          if (r.status === 429 || r.status === 504 || r.status === 503 || r.status === 502) throw { gec: true };
-          if (!r.ok) throw new Error('Overpass sunucusu hata verdi (' + r.status + ').');
-          kullanilan = sv[0];
-          if (!r.body || !r.body.getReader) return r.json();
-          var rd = r.body.getReader(), parca = [], top = 0;
-          return (function oku() { return rd.read().then(function (x) { if (x.done) return; parca.push(x.value); top += x.value.length; $('#os-durum').textContent = 'İndiriliyor (' + sv[0] + '): ' + U.num(top / 1048576, 1) + ' MB'; return oku(); }); })()
-            .then(function () { var b = new Uint8Array(top), o = 0; parca.forEach(function (p) { b.set(p, o); o += p.length; }); return JSON.parse(new TextDecoder().decode(b)); });
-        })
-        .catch(function (e) {
-          clearTimeout(sayac); ac.signal.removeEventListener('abort', iptal);
-          if (ac.signal.aborted) { var d = new Error('durduruldu'); d.name = 'AbortError'; throw d; }
-          if (e && (e.gec || e.name === 'AbortError' || e.name === 'TypeError')) return dene(i + 1); // yoğun, zaman aşımı ya da ağ hatası
-          throw e;
-        });
-    }
-    dene(0)
-      .then(function (json) {
-        if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error('Sorgu sunucuda tamamlanamadı (alan ya da veri çok büyük). Alanı küçültün ya da katman sayısını azaltın.');
-        $('#os-durum').textContent = 'İşleniyor…';
-        var k = OS.donustur(json, ids);
-        if ($('#os-kirp').checked) Object.keys(k).forEach(function (id) { k[id] = OS.kirp(k[id], st.ring); });
-        st.kirpildi = $('#os-kirp').checked; st.veri = k; st.ozet = OS.ozet(k); st.tarih = json.osm3s && json.osm3s.timestamp_osm_base;
-        st.sunucu = kullanilan; goster(ids, (Date.now() - t0) / 1000);
-      })
-      .catch(function (e) { err(e.name === 'AbortError' ? 'Sorgu durduruldu.' : e.message); })
-      .then(function () { $('#os-durum').textContent = ''; $('#os-dur').hidden = true; st.istek = null; alanDurum(); });
-  });
-  $('#os-dur').addEventListener('click', function () { if (st.istek) st.istek.abort(); });
-
-  function tablo(baslik, satirlar, b1, b2) {
-    if (!satirlar.length) return '';
-    return '<div><h3 style="margin:6px 0">' + baslik + '</h3><div class="scroll"><table class="t"><thead><tr><th>' + b1 + '</th><th class="num">' + b2 + '</th></tr></thead><tbody>' +
-      satirlar.map(function (r) { return '<tr><td>' + U.esc(r[0]) + '</td><td class="num">' + r[1] + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
-  }
-  function sirala(o) { return Object.keys(o).sort(function (a, b) { return o[b] - o[a]; }); }
-  function goster(ids, sn) {
-    var k = st.veri, o = st.ozet, toplam = 0, h = '';
-    ids.forEach(function (id) { toplam += k[id].length; });
-    $('#os-big').textContent = U.num(toplam, 0) + ' öğe';
-    $('#os-meta').textContent = ids.map(function (id) { return OS.katman(id).ad.toLocaleLowerCase('tr') + ' ' + U.num(k[id].length, 0); }).join(' · ') + ' · ' + U.num(sn, 1) + ' sn' + (st.sunucu ? ' · ' + st.sunucu : '') + (st.tarih ? ' · OSM verisi ' + st.tarih.slice(0, 10).split('-').reverse().join('.') : '');
-    if (o.bina) h += '<dl class="kv"><dt>Bina</dt><dd>' + U.num(o.bina.sayi, 0) + ' adet · taban alanı ' + AR.alanYaz(o.bina.tabanAlani) + ' (' + U.num(o.bina.tabanAlani, 0) + ' m²)</dd>' +
-      '<dt>Kat bilgisi</dt><dd>' + U.num(o.bina.katBilgili, 0) + ' binada (%' + U.num(o.bina.sayi ? o.bina.katBilgili / o.bina.sayi * 100 : 0, 0) + ')' + (o.bina.ortKat ? ' · ortalama ' + U.num(o.bina.ortKat, 1) + ' kat · bu binaların inşaat alanı ' + U.num(o.bina.insaatKatli, 0) + ' m²' : '') + '</dd>' +
-      (st.km2 ? '<dt>Taban alanı oranı</dt><dd>' + (st.kirpildi ? '%' + U.num(o.bina.tabanAlani / (st.km2 * 1e6) * 100, 1) + ' (bina tabanı / seçilen alan)' : 'hesaplanmadı: seçim sınırından kırpma kapalı olduğundan sınırı aşan binalar tümüyle sayılır; oran için kırpmayı açın') + '</dd>' : '') + '</dl>';
-    if (o.yol) h += tablo('Yollar · toplam ' + U.num(o.yol.toplam / 1000, 2) + ' km', sirala(o.yol.sinif).map(function (s) { return [s, U.num(o.yol.sinif[s] / 1000, 2) + ' km']; }), 'Sınıf', 'Uzunluk');
-    if (o.yol && o.yol.alanSayi) h += '<p class="hint">Yaya alanı ve meydan gibi alan olarak çizilmiş ' + o.yol.alanSayi + ' yol öğesi (' + U.num(o.yol.alan, 0) + ' m²) uzunluğa katılmadı.</p>';
-    if (o.donati) h += tablo('Donatı ve hizmet noktaları · ' + o.donati.sayi, sirala(o.donati.tur).map(function (s) { return [s, U.num(o.donati.tur[s], 0)]; }), 'Tür', 'Adet');
-    if (o.arazi) h += tablo('Arazi kullanımı · ' + AR.alanYaz(o.arazi.toplam), sirala(o.arazi.sinif).map(function (s) { return [s, AR.alanYaz(o.arazi.sinif[s])]; }), 'Kullanım', 'Alan');
-    if (o.yesil) h += tablo('Park ve spor alanları · ' + AR.alanYaz(o.yesil.toplam), sirala(o.yesil.sinif).map(function (s) { return [s, AR.alanYaz(o.yesil.sinif[s])]; }), 'Tür', 'Alan');
-    if (o.su && o.su.toplam) h += '<p class="meta">Su yüzeyleri: ' + AR.alanYaz(o.su.toplam) + '</p>';
-    if (o.demiryolu) h += '<p class="meta">Raylı sistem: ' + U.num(o.demiryolu.toplam / 1000, 2) + ' km</p>';
-    if (o.enerji) h += '<p class="meta">Enerji hatları: ' + U.num(o.enerji.toplam / 1000, 2) + ' km</p>';
-    $('#os-ozet').innerHTML = h;
-    // harita: alttan üste arazi, yeşil, su, bina, raylı, yol, enerji, donatı
-    ['arazi', 'yesil', 'su', 'bina', 'demiryolu', 'yol', 'enerji', 'donati'].forEach(function (id) {
-      if (!k[id]) { api.remove('os-' + id); return; }
-      api.setData('os-' + id, { type: 'FeatureCollection', features: k[id] }, { color: RENK[id], line: id === 'bina' ? '#6B3A10' : RENK[id], fillOpacity: id === 'arazi' ? 0.25 : id === 'bina' ? 0.6 : 0.45, width: id === 'yol' ? 1.6 : id === 'bina' ? 0.6 : 1.2, radius: 4 });
-    });
-    $('#os-leg').innerHTML = ids.map(function (id) { return '<span><i style="background:' + RENK[id] + '"></i>' + OS.katman(id).ad + '</span>'; }).join('');
-    $('#os-exp').hidden = !toplam;
-  }
-
-  // ---------- Dışa aktarma ----------
-  var DOSYA = { bina: 'binalar', yol: 'yollar', demiryolu: 'rayli_sistemler', su: 'su', arazi: 'arazi_kullanimi', yesil: 'park_spor', donati: 'donati_noktalari', enerji: 'enerji_hatlari' };
-  function benioku(crs) {
-    return 'OpenStreetMap verisi – topografya.com.tr\r\n\r\nKaynak: © OpenStreetMap katkıcıları. Lisans: Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/1-0/\r\n' +
-      'Bu veriyi kullanırken "© OpenStreetMap katkıcıları" atfını yapın. Bu veriden türetip kamuya açık kullandığınız veritabanlarını da ODbL ile paylaşmanız gerekir.\r\n' +
-      'Ayrıntı: https://www.openstreetmap.org/copyright\r\n\r\nOSM veri tarihi: ' + (st.tarih || '') + '\r\nKoordinat sistemi: ' + (K.SYSTEMS[crs] ? K.SYSTEMS[crs].label : crs) + '\r\nSeçilen alan: ' + st.km2.toFixed(3) + ' km²\r\n' +
-      '\r\nOSM gönüllülerce oluşturulur; resmî veri değildir. Resmî işlerde ilgili kurumların kayıtları esastır.\r\n';
-  }
-  $('#os-dl').addEventListener('click', function () {
-    var k = st.veri; if (!k) return;
-    var fmt = $('#os-fmt').value, crs = $('#os-crs').value, ids = Object.keys(k).filter(function (id) { return k[id].length; });
-    if (crs === 'auto') { var lo = 0; st.ring.forEach(function (c) { lo += c[0]; }); crs = 'tm-turef-' + AR.tmCm(lo / st.ring.length); }
-    if (fmt === 'geojson' || fmt === 'kml') crs = 'geo-turef';
-    var enc = new TextEncoder(), dosyalar = {}, ad = 'osm_' + new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    try {
-      if (fmt === 'dxf' || fmt === 'kml') {
-        var hepsi = [];
-        ids.forEach(function (id) { k[id].forEach(function (f) { var p = Object.assign({}, f.properties); p.katman = (id === 'yol' ? 'YOL_' + (p.sinif || '') : DOSYA[id]).replace(/[\s()]+/g, '_').replace(/_+$/, ''); p.veri = OS.katman(id).ad; hepsi.push({ type: 'Feature', properties: p, geometry: f.geometry }); }); });
-        var out = F.write({ type: 'FeatureCollection', features: hepsi }, 'geo-turef', { format: fmt, crs: crs, layerField: fmt === 'dxf' ? 'katman' : null, nameField: 'ad' }, ad);
-        if (fmt === 'kml') { U.download(out.name, out.data); return; }
-        dosyalar[out.name] = typeof out.data === 'string' ? enc.encode(out.data) : out.data;
-      } else {
-        ids.forEach(function (id) {
-          var fc = { type: 'FeatureCollection', features: k[id] }, nm = DOSYA[id];
-          if (fmt === 'shp') { var z = F.unzip(F.write(fc, 'geo-turef', { format: 'shp', crs: crs }, nm).data); Object.keys(z).forEach(function (f) { dosyalar[f] = z[f]; }); }
-          else if (fmt === 'geojson') dosyalar[nm + '.geojson'] = enc.encode(F.write(fc, 'geo-turef', { format: 'geojson' }, nm).data);
-          else if (fmt === 'csv') {
-            var anahtar = {}; k[id].forEach(function (f) { Object.keys(f.properties).forEach(function (a) { anahtar[a] = 1; }); });
-            var bas = Object.keys(anahtar), dn = K.SYSTEMS[crs].kind === 'geo', rows = [bas.concat(dn ? ['enlem', 'boylam'] : ['Y', 'X'])];
-            k[id].forEach(function (f) { var c = OS.merkez(f.geometry), p = K.transform('geo-turef', crs, { lat: c[1], lon: c[0] }); rows.push(bas.map(function (a) { var v = f.properties[a]; return v == null ? '' : typeof v === 'number' ? String(+v.toFixed(3)) : v; }).concat(dn ? [c[1].toFixed(7), c[0].toFixed(7)] : [p.y.toFixed(3), p.x.toFixed(3)])); });
-            dosyalar[nm + '.csv'] = enc.encode(U.csvRapor(rows));
-          }
-        });
+  var H = window.TA.H, K = window.TA.K, F = window.TA.F, U = window.U, $ = function (s) { return U.$(s, root); };
+  var last = null, pts = null, cizim = null, dxf1 = null;
+  function sample(kind, kaydir) {
+    var out = [], k = 1;
+    for (var i = 0; i <= 8; i++) for (var j = 0; j <= 8; j++) {
+      var dy = i * 6, dx = j * 6, z;
+      if (kind === 1) z = 810 + 0.045 * dy + 0.02 * dx + 1.2 * Math.exp(-((dy - 30) * (dy - 30) + (dx - 18) * (dx - 18)) / 140) - 0.6 * Math.exp(-((dy - 12) * (dy - 12) + (dx - 38) * (dx - 38)) / 90);
+      else if (kind === 2) { var r = Math.hypot(dy - 24, dx - 24); z = 805 + 0.01 * dy + Math.max(0, 6 - r * 0.38); }
+      else { // önce / sonra: ikinci ölçüm farklı noktalarda, ortada 1,5 m'ye varan kazı
+        if (kaydir) { dy += 3; dx += 3; if (dy > 48 || dx > 48) continue; }
+        z = 820 + 0.03 * dy - 0.015 * dx - (kaydir ? Math.max(0, 1.5 - Math.hypot(dy - 24, dx - 24) * 0.08) : 0);
       }
-    } catch (e) { err('Dışa aktarılamadı: ' + e.message); return; }
-    dosyalar['BENIOKU.txt'] = enc.encode(benioku(crs));
-    U.download(ad + '_' + fmt + '.zip', F.zip(dosyalar));
+      out.push(k++ + '  ' + (487200 + dy).toFixed(2) + '  ' + (4420800 + dx).toFixed(2) + '  ' + z.toFixed(3));
+    }
+    return out.join('\n');
+  }
+  function tur() { return $('#hc-tur').value; }
+  function syncRef() {
+    var t = tur();
+    $('#hc-zw').hidden = t !== 'kot'; $('#hc-egw').hidden = t !== 'egim'; $('#hc-2w').hidden = t !== 'fark';
+    $('#hc-inl').textContent = t === 'fark' ? 'Önce: ilk ölçüm noktaları (ad Y X Z)' : 'Ölçüm noktaları (ad Y X Z)';
+  }
+  $('#hc-tur').addEventListener('change', function () { syncRef(); run(); });
+  function sayi(id, zorunlu) { var v = $(id).value.trim(); if (!v) { if (zorunlu) throw new Error($(id).closest('label').firstChild.textContent.trim() + ' girin'); return null; } var n = K.parseNumber(v, { tr: true }); if (!isFinite(n)) throw new Error($(id).closest('label').firstChild.textContent.trim() + ' sayı olmalı'); return n; }
+  function run() {
+    var err = $('#hc-err'), t = tur(), ref;
+    try {
+      pts = H.parseXYZ($('#hc-in').value, K.parseNumber);
+      if (pts.length < 3) throw new Error('En az 3 nokta gerekir');
+      if (t === 'kot') ref = { type: 'kot', z: sayi('#hc-z', true) };
+      else if (t === 'denge') ref = { type: 'denge' };
+      else if (t === 'sinir') ref = { type: 'sinir' };
+      else if (t === 'egim') {
+        var my = 0, mx = 0, mz = 0; pts.forEach(function (p) { my += p.y; mx += p.x; mz += p.z; });
+        var y0 = sayi('#hc-ey'), x0 = sayi('#hc-ex'), z0 = sayi('#hc-ez');
+        ref = { type: 'egim', y0: y0 == null ? my / pts.length : y0, x0: x0 == null ? mx / pts.length : x0, z0: z0 == null ? mz / pts.length : z0, egim: sayi('#hc-ee', true) / 100, az: sayi('#hc-ea', true) };
+      }
+      var kab = sayi('#hc-kab'), kam = sayi('#hc-kam');
+      if (kab != null && !(kab >= 1 && kab <= 3)) throw new Error('Kabarma katsayısı 1 ile 3 arasında olmalı (ör. 1,25)');
+      if (kam != null && !(kam > 0)) throw new Error('Kamyon kapasitesi pozitif olmalı');
+      if (t === 'fark') {
+        var p2 = H.parseXYZ($('#hc-in2').value, K.parseNumber); if (p2.length < 3) throw new Error('İkinci ölçüm için en az 3 nokta gerekir');
+        last = H.fark(pts, p2); cizim = { nodes: last.nodes, refAt: function () { return 0; }, d: function (p) { return p.z; } };
+      } else {
+        last = H.volumes(pts, ref); cizim = { nodes: pts, refAt: last.refAt };
+      }
+      last.ref = ref; last.kab = kab; last.kam = kam; err.hidden = true;
+    } catch (e) { err.textContent = e.message; err.hidden = false; last = null; U.gecersiz(root, ['#hc-dxf', '#hc-csv', '#hc-big', '#hc-meta', '#hc-kv']); draw(null); return; }
+    var r = last, kv = '';
+    $('#hc-big').textContent = Math.abs(r.net) < 0.005 ? 'Kazı ile dolgu dengede' : (r.net >= 0 ? 'Kazı fazlası ' : 'Dolgu fazlası ') + U.num(Math.abs(r.net), 2) + ' m³';
+    if (t === 'fark') {
+      $('#hc-meta').textContent = 'iki yüzeyin ortak alt bölümü: ' + r.triangles.length + ' parça · ' + U.num(r.area2d, 1) + ' m²';
+      kv += '<dt>Kazılan (önce − sonra &gt; 0)</dt><dd>' + U.num(r.cut, 2) + ' m³ · ' + U.num(r.cutArea, 1) + ' m²</dd><dt>Doldurulan</dt><dd>' + U.num(r.fill, 2) + ' m³ · ' + U.num(r.fillArea, 1) + ' m²</dd><dt>Ortak alan</dt><dd>' + U.num(r.area2d, 2) + ' m²</dd>';
+    } else {
+      $('#hc-meta').textContent = pts.length + ' nokta · ' + r.triangles.length + ' üçgen · kot ' + U.num(r.zmin, 2) + '–' + U.num(r.zmax, 2) + ' m';
+      if (t === 'denge') kv += '<dt>Dengeli kot</dt><dd><strong>' + U.num(r.ref.z, 3) + ' m</strong> ' + U.copyBtn(r.ref.z.toFixed(3)) + '</dd>';
+      if (t === 'egim') kv += '<dt>Proje düzlemi</dt><dd>' + U.num(r.ref.z0, 3) + ' m (Y ' + U.num(r.ref.y0, 2) + ', X ' + U.num(r.ref.x0, 2) + ') · %' + U.num(r.ref.egim * 100, 2) + ' · ' + U.num(r.ref.az, 1) + '° yönünde yükselir</dd>';
+      kv += '<dt>Kazı</dt><dd>' + U.num(r.cut, 2) + ' m³ · ' + U.num(r.cutArea, 1) + ' m²</dd><dt>Dolgu</dt><dd>' + U.num(r.fill, 2) + ' m³ · ' + U.num(r.fillArea, 1) + ' m²</dd>' +
+        '<dt>Yatay alan</dt><dd>' + U.num(r.area2d, 2) + ' m²</dd><dt>Yüzey alanı (3B)</dt><dd>' + U.num(r.area3d, 2) + ' m²</dd>' +
+        (t === 'sinir' ? '<dt>Taban düzlemi</dt><dd>sınır noktalarına en uygun eğik düzlem (en küçük kareler): ' + (function (pl) { var e = Math.hypot(pl.b, pl.c), az = (Math.atan2(pl.b, pl.c) * 180 / Math.PI + 360) % 360; return e < 1e-6 ? 'yatay' : 'eğim %' + U.num(e * 100, 2) + ', ' + U.num(az, 1) + '° yönünde yükselir'; })(r.ref.plane) + ' · sınır noktalarının ortalama kotu ' + U.num(r.ref.plane.mean, 3) + ' m</dd>' : '');
+    }
+    if (r.kab != null) { r.gevsek = r.cut * r.kab; kv += '<dt>Gevşek kazı hacmi</dt><dd>' + U.num(r.gevsek, 2) + ' m³ (× ' + U.num(r.kab, 2) + ')</dd>'; } else r.gevsek = null;
+    if (r.kam != null) { var hv = r.gevsek != null ? r.gevsek : r.cut; r.sefer = Math.ceil(hv / r.kam - 1e-9); kv += '<dt>Kamyon seferi</dt><dd>' + r.sefer + ' sefer (' + U.num(r.kam, 1) + ' m³' + (r.gevsek == null ? '; kabarma girilmedi, yerinde hacimle' : '') + ')</dd>'; } else r.sefer = null;
+    if (r.duplicates && r.duplicates.length) kv += '<dt>Uyarı</dt><dd>Aynı konumda yinelenen nokta: ' + r.duplicates.slice(0, 8).join(', ') + '</dd>';
+    $('#hc-kv').innerHTML = kv;
+    $('#hc-dxf').disabled = t === 'fark'; $('#hc-dxf').title = t === 'fark' ? 'Önce/sonra karşılaştırmasında tek bir TIN yoktur; iki yüzeyi ayrı ayrı hesaplayıp indirebilirsiniz.' : ''; $('#hc-csv').disabled = false; draw(r);
+  }
+  function draw(r) {
+    var svg = $('#hc-svg'); if (!r || !cizim) { svg.innerHTML = ''; return; }
+    var N = cizim.nodes, W = 600, Ht = 460, pad = 26;
+    var ys = N.map(function (p) { return p.y; }), xs = N.map(function (p) { return p.x; });
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys), minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var sc = Math.min((W - 2 * pad) / Math.max(maxY - minY, 1e-9), (Ht - 2 * pad) / Math.max(maxX - minX, 1e-9)), ox = (W - (maxY - minY) * sc) / 2, oy = (Ht - (maxX - minX) * sc) / 2;
+    function P(p) { return (ox + (p.y - minY) * sc).toFixed(1) + ',' + (Ht - oy - (p.x - minX) * sc).toFixed(1); }
+    function fark(a, b, c) { return (a.z + b.z + c.z) / 3 - cizim.refAt((a.y + b.y + c.y) / 3, (a.x + b.x + c.x) / 3); }
+    var maxD = 0; r.triangles.forEach(function (t) { maxD = Math.max(maxD, Math.abs(fark(N[t[0]], N[t[1]], N[t[2]]))); });
+    var h = r.triangles.map(function (t) {
+      var a = N[t[0]], b = N[t[1]], c = N[t[2]], d = fark(a, b, c);
+      var op = maxD > 0 ? (0.15 + 0.75 * Math.abs(d) / maxD).toFixed(2) : 0.2;
+      return '<polygon points="' + P(a) + ' ' + P(b) + ' ' + P(c) + '" fill="' + (d >= 0 ? 'var(--cut)' : 'var(--fill)') + '" fill-opacity="' + op + '" stroke="var(--panel)" stroke-width=".6"/>';
+    }).join('');
+    h += '<polygon points="' + r.hull.map(function (i) { return P(N[i]); }).join(' ') + '" fill="none" stroke="var(--text)" stroke-width="1.4"/>';
+    if (N.length <= 400) N.forEach(function (p) { var q = P(p).split(','); h += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="1.6" fill="var(--text)"/>'; });
+    h += '<g transform="translate(' + (W - 22) + ',26)"><line x1="0" y1="14" x2="0" y2="-12" stroke="var(--text)" stroke-width="1.4"/><path d="M0,-16 L-5,-6 L5,-6 Z" fill="var(--text)"/><text class="svg-strong" text-anchor="middle" y="28">K</text></g>';
+    svg.innerHTML = h;
+  }
+  // ---------- Dosya okuma (NCN/TXT/CSV metin; DXF → kotlu noktalar, katman seçimi) ----------
+  function noktaMetni(list) { return list.map(function (p, i) { return (p.ad || i + 1) + '  ' + p.y.toFixed(3) + '  ' + p.x.toFixed(3) + '  ' + p.z.toFixed(3); }).join('\n'); }
+  function katmanPaneli() {
+    var w = $('#hc-katw'); if (!dxf1) { w.hidden = true; return; }
+    var say = dxf1.say, ks = Object.keys(say).sort();
+    $('#hc-katnot').textContent = 'DXF: ' + dxf1.ad + ' · kotlu noktası olan katmanlar. Yüzeye ait olmayanların işaretini kaldırın (ör. yapı, yazı, çerçeve).';
+    $('#hc-kat').innerHTML = ks.map(function (k) { return '<label class="f im-chk"><input type="checkbox" data-kat="' + U.esc(k) + '"' + (dxf1.secili.indexOf(k) >= 0 ? ' checked' : '') + '> ' + U.esc(k) + ' <span class="hint">(' + say[k] + ')</span></label>'; }).join('');
+    w.hidden = !ks.length;
+  }
+  function dxfUygula() { var d = H.dxfNoktalari(dxf1.fc, dxf1.secili); $('#hc-in').value = noktaMetni(d.noktalar); }
+  $('#hc-kat').addEventListener('change', function (e) {
+    var k = e.target.dataset.kat; if (k == null) return;
+    var i = dxf1.secili.indexOf(k); if (e.target.checked && i < 0) dxf1.secili.push(k); if (!e.target.checked && i >= 0) dxf1.secili.splice(i, 1);
+    dxfUygula(); run();
   });
-  alanDurum();
+  function dosyaOku(f, hedef, ilk) {
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        if (/\.dxf$/i.test(f.name)) {
+          var bytes = new Uint8Array(rd.result), text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { text = new TextDecoder('windows-1254').decode(bytes); }
+          var fc = F.readDxf(text).fc, d = H.dxfNoktalari(fc);
+          if (!d.noktalar.length) throw new Error('DXF\'te kotlu nokta bulunamadı (POINT, kotlu çoklu çizgi, 3DFACE ya da blok).');
+          if (ilk) { dxf1 = { ad: f.name, fc: fc, say: d.katmanlar, secili: Object.keys(d.katmanlar) }; katmanPaneli(); }
+          $(hedef).value = noktaMetni(d.noktalar);
+        } else { $(hedef).value = new TextDecoder('utf-8').decode(new Uint8Array(rd.result)); if (ilk) { dxf1 = null; katmanPaneli(); } }
+        run();
+      } catch (e) { $('#hc-err').textContent = e.message; $('#hc-err').hidden = false; }
+    };
+    rd.readAsArrayBuffer(f);
+  }
+  $('#hc-file').addEventListener('change', function (e) { var f = e.target.files[0]; if (f) dosyaOku(f, '#hc-in', true); e.target.value = ''; });
+  $('#hc-file2').addEventListener('change', function (e) { var f = e.target.files[0]; if (f) dosyaOku(f, '#hc-in2', false); e.target.value = ''; });
+  $('#hc-in').addEventListener('input', function () { if (dxf1) { dxf1 = null; katmanPaneli(); } });
+  $('#hc-run').addEventListener('click', run);
+  $('#hc-ornek1').addEventListener('click', function () { dxf1 = null; katmanPaneli(); $('#hc-in').value = sample(1); $('#hc-tur').value = 'kot'; $('#hc-z').value = '812,00'; syncRef(); run(); });
+  $('#hc-ornek2').addEventListener('click', function () { dxf1 = null; katmanPaneli(); $('#hc-in').value = sample(2); $('#hc-tur').value = 'sinir'; syncRef(); run(); });
+  $('#hc-ornek3').addEventListener('click', function () { dxf1 = null; katmanPaneli(); $('#hc-in').value = sample(3); $('#hc-in2').value = sample(3, true); $('#hc-tur').value = 'fark'; syncRef(); run(); });
+  $('#hc-dxf').addEventListener('click', function () { if (last && pts && tur() !== 'fark') U.download('tin.dxf', H.tinToDxf(pts, last.triangles, 0.4)); });
+  $('#hc-csv').addEventListener('click', function () {
+    var r = last; if (!r) return;
+    var ad = $('#hc-tur').selectedOptions[0].textContent;
+    var rows = [['kalem', 'deger', 'birim'], ['hesap_turu', ad, ''], ['kazi', r.cut.toFixed(3), 'm3'], ['dolgu', r.fill.toFixed(3), 'm3'], ['net', r.net.toFixed(3), 'm3'],
+      ['kazi_alani', r.cutArea.toFixed(2), 'm2'], ['dolgu_alani', r.fillArea.toFixed(2), 'm2'], ['yatay_alan', r.area2d.toFixed(2), 'm2']];
+    if (r.area3d != null) rows.push(['yuzey_alani_3b', r.area3d.toFixed(2), 'm2']);
+    if (r.ref && r.ref.type === 'kot') rows.push(['proje_kotu', r.ref.z.toFixed(3), 'm']);
+    if (r.ref && r.ref.type === 'denge') rows.push(['dengeli_kot', r.ref.z.toFixed(3), 'm']);
+    if (r.ref && r.ref.type === 'egim') rows.push(['duzlem_baslangic_Y', r.ref.y0.toFixed(3), 'm'], ['duzlem_baslangic_X', r.ref.x0.toFixed(3), 'm'], ['duzlem_baslangic_kotu', r.ref.z0.toFixed(3), 'm'], ['egim', (r.ref.egim * 100).toFixed(3), '%'], ['yukselme_yonu', r.ref.az.toFixed(2), 'derece']);
+    if (r.kab != null) rows.push(['kabarma_katsayisi', r.kab.toFixed(3), ''], ['gevsek_kazi', r.gevsek.toFixed(3), 'm3']);
+    if (r.kam != null) rows.push(['kamyon_kapasitesi', r.kam.toFixed(2), 'm3'], ['sefer', r.sefer, 'adet']);
+    U.download('kazi_dolgu_raporu.csv', U.csvRapor(rows), 'text/csv');
+  });
+  ['#hc-kab', '#hc-kam'].forEach(function (id) { $(id).addEventListener('change', run); });
+  U.zipper = window.TA.F ? function (name, data) { var o = {}; o[name] = typeof data === 'string' ? new TextEncoder().encode(data) : data; return window.TA.F.zip(o); } : U.zipper;
+  $('#hc-ornek1').click();
 }};
 
-(function(){var s=document.getElementById('t-osm');U.subtabs(s);TOOLS['osm'].init(s);})();
+(function(){var s=document.getElementById('t-hacim');U.subtabs(s);TOOLS['hacim'].init(s);})();

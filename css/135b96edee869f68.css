@@ -1,4 +1,3 @@
-
 /* Topografya araçları ortak görünümü (tek, açık tema; sitenin beyaz zeminiyle uyumlu). Düzen: beyaz başlık şeridi, ince alt çizgi; araç başlığı; tek sütun araç gövdesi (gerekirse iki sütun); altta yöntem ve kaynakça. */
 /* Bilerek tek tema: koyu görünüm sistemi tercihinde de sayfa beyaz kalır */
 :root{color-scheme:light;
@@ -386,3 +385,4 @@ header.site-bas .site-ic{position:relative}
   .site-mobil-panel{position:fixed;left:0;right:0;top:0;max-height:100vh;max-height:100dvh;padding:16px}
   .menu-col a{padding:9px 0}
 }
+.maplibregl-cooperative-gesture-screen{font-family:var(--f-display);font-size:17px;font-weight:500;background:rgba(17,17,17,.55)}

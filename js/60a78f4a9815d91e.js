@@ -251,7 +251,11 @@
       container: el, style: online ? { version: 8, sources: {}, layers: [bgLayer('#F2F1EC')] } : offlineStyle(),
       center: opts.center || [35.2, 39.1], zoom: opts.zoom || 5, attributionControl: false, preserveDrawingBuffer: !!opts.preserve, dragRotate: false, pitchWithRotate: false,
       // Türkiye'ye özgü tematik haritalar (nüfus, sınırlar): Türkiye ve yakın çevresi dışına kaydırılamaz (Kıbrıs ve komşu ülkelerin bir kısmı dahil; telefonda dikey ekranda bütün Türkiye sığsın diye kutu geniş)
-      maxBounds: opts.sinirla ? [[12.0, 24.0], [58.5, 52.0]] : undefined
+      maxBounds: opts.sinirla ? [[12.0, 24.0], [58.5, 52.0]] : undefined,
+      // Dokunmatik ekranda tek parmak sayfayı kaydırır, harita iki parmakla kayar (sayfada haritaya takılıp kalınmasın); dokunma, nokta koyma ve çizim tek parmakla çalışır.
+      // Fareli bilgisayarda davranış değişmez (tekerlekle yakınlaşma Ctrl istemez).
+      cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches),
+      locale: { 'CooperativeGesturesHandler.MobileHelpText': 'Haritayı kaydırmak için iki parmak kullanın', 'CooperativeGesturesHandler.WindowsHelpText': 'Yakınlaştırmak için Ctrl tuşuna basılı tutarak tekerleği çevirin', 'CooperativeGesturesHandler.MacHelpText': 'Yakınlaştırmak için ⌘ tuşuna basılı tutarak tekerleği çevirin' }
     });
     map.touchZoomRotate.disableRotation();
     // Türkiye görünümü: sabit yakınlaştırma yerine kutuya sığdırma (harita kutusunun boyuna göre tüm ülke görünür)
@@ -524,71 +528,112 @@
 })();
 
 
-/* Manyetik Sapma Hesaplayıcı arayüzü */
-(window.TOOLS = window.TOOLS || {}).manyetik = { init: function (root) {
+/* Haritada Ölç ve Çiz arayüzü */
+(window.TOOLS = window.TOOLS || {}).olcharita = { init: function (root) {
   'use strict';
-  var M = window.TA.M, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var res = null;
-  var today = new Date(); var iso = today.toISOString().slice(0, 10);
-  $('#mg-date').value = iso < '2025-01-01' ? '2025-01-01' : iso > '2029-12-31' ? '2029-12-31' : iso;
-  function dir(v) { return (v >= 0 ? 'doğu' : 'batı'); }
-  function dm(v) { var p = K.toDMSParts(v, 0); return (v < 0 ? '−' : '') + p.d + '°' + (p.m < 10 ? '0' : '') + p.m + '′'; }
+  var GD = window.TA.GD, F = window.TA.F, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  var feats = [], sel = -1, counter = 0;
+  var api = window.HARITA.create($('#oh-map'), { center: [32.854, 39.92], zoom: 13 });
+  U.zipper = function (name, data) { var o = {}; o[name] = typeof data === 'string' ? new TextEncoder().encode(data) : data; return F.zip(o); };
 
-  function run() {
-    var err = $('#mg-err');
-    try {
-      var lat = K.parseAngle($('#mg-lat').value, 'lat'), lon = K.parseAngle($('#mg-lon').value, 'lon'), alt = K.parseNumber($('#mg-alt').value || '0');
-      if (!isFinite(lat) || !isFinite(lon)) throw new Error('Enlem ve boylamı ondalık ya da derece-dakika-saniye olarak yazın (yön harfleri: enlemde K/G, boylamda D/B)');
-      if (!isFinite(alt)) throw new Error('Yükseklik metre cinsinden sayı olmalı');
-      var d = $('#mg-date').value; if (!d) throw new Error('Tarih seçin');
-      var date = new Date(d + 'T12:00:00Z');
-      res = M.compute(lat, lon, alt / 1000, date); err.hidden = true;
-    } catch (e) { err.textContent = e.message; err.hidden = false; res = null; U.gecersiz(root, ['#mg-big', '#mg-meta', '#mg-kv', '#mg-conv', '#mg-svg']); return; }
-    var r = res;
-    $('#mg-big').textContent = U.num(Math.abs(r.decl), 2) + '° ' + dir(r.decl);
-    $('#mg-meta').textContent = dm(r.decl) + ' · yıllık değişim ' + (r.declPerYear >= 0 ? '+' : '−') + U.num(Math.abs(r.declPerYear * 60), 1) + '′ · ondalık yıl ' + U.num(r.decimalYear, 3);
-    $('#mg-kv').innerHTML =
-      '<dt>İnklinasyon I</dt><dd>' + U.num(r.incl, 2) + '°</dd>' +
-      '<dt>Toplam şiddet F</dt><dd>' + U.num(r.f, 0) + ' nT</dd>' +
-      '<dt>Yatay bileşen H</dt><dd>' + U.num(r.h, 0) + ' nT</dd>' +
-      '<dt>Düşey bileşen Z</dt><dd>' + U.num(r.z, 0) + ' nT</dd>' +
-      '<dt>γ (3° TM, OM ' + r.tm.cm + '°)</dt><dd>' + U.num(r.tm.convergence, 4) + '° · ' + dm(r.tm.convergence) + '</dd>' +
-      '<dt>γ (UTM ' + r.utm.zone + ')</dt><dd>' + U.num(r.utm.convergence, 4) + '° · ' + dm(r.utm.convergence) + '</dd>' +
-      '<dt>Grid-manyetik açı</dt><dd>TM: ' + U.num(r.tm.gridMag, 3) + '° · UTM: ' + U.num(r.utm.gridMag, 3) + '°</dd>';
-    conv(); draw();
+  ['geo-turef'].concat(K.TM_CMS.map(function (c) { return 'tm-turef-' + c; }), K.UTM_ZONES.map(function (z) { return 'utm-wgs84-' + z; })).forEach(function (id) {
+    $('#oh-crs').add(new Option(id === 'geo-turef' ? 'Coğrafi – WGS84 / TUREF' : K.SYSTEMS[id].label, id));
+  });
+  $('#oh-crs').value = 'tm-turef-33';
+
+  function fmtLen(m) { return m >= 1000 ? U.num(m / 1000, 3) + ' km' : U.num(m, 2) + ' m'; }
+  function fmtArea(a) { return a >= 1e6 ? U.num(a / 1e6, 4) + ' km²' : U.num(a, 2) + ' m²'; }
+  function summary(f) {
+    var m = GD.measure(f.geometry); if (!m) return '';
+    if (m.kind === 'line') return fmtLen(m.length);
+    if (m.kind === 'area') return fmtArea(m.area);
+    return U.num(m.lat, 6) + ', ' + U.num(m.lon, 6);
   }
-  function conv() {
-    if (!res) return;
-    var m = K.parseNumber($('#mg-mag').value), out = $('#mg-conv');
-    if (!isFinite(m)) { out.innerHTML = '<dt>Hata</dt><dd>Azimut sayı olmalı (0–360)</dd>'; return; }
-    var c = M.fromMagnetic(((m % 360) + 360) % 360, res, $('#mg-grid').value);
-    out.innerHTML = '<dt>Coğrafi azimut</dt><dd>' + U.num(c.trueAz, 2) + '°</dd><dt>Semt açısı</dt><dd>' + U.num(c.grid, 2) + '° · ' + U.num(c.gridGrad, 3) + 'ᵍ</dd>';
+  function redraw() {
+    api.setData('cizim', { type: 'FeatureCollection', features: feats.map(function (f, i) { return { type: 'Feature', properties: { i: i }, geometry: f.geometry }; }) });
+    api.setData('secili', { type: 'FeatureCollection', features: sel >= 0 && feats[sel] ? [feats[sel]] : [] }, { color: U.cssVar('--text'), line: U.cssVar('--amber'), width: 3.5, fillOpacity: 0.1, radius: 7 });
+    $('#oh-empty').hidden = feats.length > 0;
+    $('#oh-list').tBodies[0].innerHTML = feats.map(function (f, i) {
+      return '<tr' + (i === sel ? ' class="hl"' : '') + ' data-i="' + i + '"><td class="m">' + (i + 1) + '</td><td><input class="mini" data-name="' + i + '" value="' + U.esc(f.properties.ad || '') + '" aria-label="Öğe adı"></td><td class="num">' + summary(f) + '</td><td><button class="copy" type="button" data-del="' + i + '" aria-label="Sil">Sil</button></td></tr>';
+    }).join('');
+    detail();
   }
-  function draw() {
-    var r = res, cx = 210, cy = 210, L = 160;
-    var mx = Math.max(Math.abs(r.decl), Math.abs(r.tm.convergence), 0.5), f = 24 / mx; // abartma katsayısı
-    function ray(angDeg, color, w, dash, label, val, len) {
-      var Ln = len || L, a = angDeg * f * Math.PI / 180, x = cx + Ln * Math.sin(a), y = cy - Ln * Math.cos(a);
-      if (len) { // kısa ışın (grid kuzeyi): etiket çizginin ucunda, coğrafi kuzey çizgisine binmemesi için yana alınır
-        var sag = angDeg >= 0, tx = (x + (sag ? 10 : -10)).toFixed(1), ta = sag ? 'start' : 'end';
-        return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="' + color + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>' +
-          '<text class="svg-strong" text-anchor="' + ta + '" x="' + tx + '" y="' + (y + 4).toFixed(1) + '">' + label + '</text>' + (val ? '<text class="svg-text" text-anchor="' + ta + '" x="' + tx + '" y="' + (y + 18).toFixed(1) + '">' + val + '</text>' : '');
-      }
-      return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="' + color + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>' +
-        '<text class="svg-strong" text-anchor="middle" x="' + (cx + (Ln + 22) * Math.sin(a)).toFixed(1) + '" y="' + (cy - (Ln + 22) * Math.cos(a) + 4).toFixed(1) + '">' + label + '</text>' +
-        (val ? '<text class="svg-text" text-anchor="middle" x="' + (cx + (Ln + 22) * Math.sin(a)).toFixed(1) + '" y="' + (cy - (Ln + 22) * Math.cos(a) + 18).toFixed(1) + '">' + val + '</text>' : '');
+  function detail() {
+    var f = feats[sel];
+    if (!f) { $('#oh-sel-v').textContent = '—'; $('#oh-sel-m').textContent = ''; $('#oh-sel-kv').innerHTML = ''; return; }
+    var m = GD.measure(f.geometry), kv = '';
+    if (m.kind === 'line') {
+      $('#oh-sel-k').textContent = 'Çizgi · ' + (f.properties.ad || '#' + (sel + 1)); $('#oh-sel-v').textContent = fmtLen(m.length);
+      $('#oh-sel-m').textContent = m.segments.length + ' bölüt · jeodezik uzunluk';
+      kv = '<dt>3° TM uzunluğu</dt><dd>' + U.num(m.tm.length, 3) + ' m (OM ' + m.tm.cm + '°)</dd><dt>Fark</dt><dd>' + U.num(m.tm.length - m.length, 3) + ' m</dd>' +
+        m.segments.slice(0, 12).map(function (s, i) { return '<dt>Bölüt ' + (i + 1) + '</dt><dd>' + U.num(s.s, 2) + ' m · azimut ' + U.num(s.azi, 2) + '°</dd>'; }).join('');
+    } else if (m.kind === 'area') {
+      var b = window.TA.O.donumBreakdown(m.tm.area);
+      $('#oh-sel-k').textContent = 'Alan · ' + (f.properties.ad || '#' + (sel + 1)); $('#oh-sel-v').textContent = fmtArea(m.area);
+      $('#oh-sel-m').textContent = 'jeodezik alan · çevre ' + fmtLen(m.perimeter);
+      kv = '<dt>3° TM alanı</dt><dd>' + U.num(m.tm.area, 2) + ' m² (OM ' + m.tm.cm + '°)</dd><dt>Dönüm</dt><dd>' + U.num(b.donum, 0) + ' dönüm ' + U.num(b.m2, 2) + ' m²</dd><dt>Hektar</dt><dd>' + U.num(m.tm.area / 10000, 4) + ' ha</dd><dt>3° TM çevresi</dt><dd>' + U.num(m.tm.perimeter, 3) + ' m</dd>';
+    } else if (m.kind === 'point') {
+      $('#oh-sel-k').textContent = 'Nokta · ' + (f.properties.ad || '#' + (sel + 1)); $('#oh-sel-v').textContent = K.fmtDMS(m.lat, true, 2) + ' ' + K.fmtDMS(m.lon, false, 2);
+      $('#oh-sel-m').textContent = U.num(m.lat, 7) + ', ' + U.num(m.lon, 7);
+      kv = '<dt>3° TM (OM ' + m.tm.cm + '°)</dt><dd>Y ' + U.num(m.tm.y, 3) + ' · X ' + U.num(m.tm.x, 3) + ' ' + U.copyBtn(m.tm.y.toFixed(3) + ' ' + m.tm.x.toFixed(3)) + '</dd>';
     }
-    var h = '<circle cx="' + cx + '" cy="' + cy + '" r="' + (L - 30) + '" fill="none" stroke="var(--rule)"/>';
-    for (var k = 0; k < 360; k += 30) { var a = k * Math.PI / 180; h += '<line x1="' + (cx + (L - 36) * Math.sin(a)) + '" y1="' + (cy - (L - 36) * Math.cos(a)) + '" x2="' + (cx + (L - 24) * Math.sin(a)) + '" y2="' + (cy - (L - 24) * Math.cos(a)) + '" stroke="var(--rule)"/>'; }
-    h += ray(0, 'var(--text)', 2.2, '', 'Coğrafi K', '');
-    h += ray(r.decl, 'var(--amber)', 2.6, '', 'Manyetik K', 'D = ' + U.num(r.decl, 2) + '°');
-    h += ray(r.tm.convergence, 'var(--muted)', 1.8, '6 4', 'Grid K', 'γ = ' + U.num(r.tm.convergence, 2) + '°', L - 78);
-    h += '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="var(--text)"/>';
-    $('#mg-svg').innerHTML = h;
+    $('#oh-sel-kv').innerHTML = kv;
   }
-  $('#mg-form').addEventListener('submit', function (e) { e.preventDefault(); run(); });
-  $('#mg-mag').addEventListener('input', conv); $('#mg-grid').addEventListener('change', conv);
-  run();
+  function add(f, name) { counter++; f.properties = Object.assign({ ad: name || ({ Point: 'Nokta ', LineString: 'Çizgi ', Polygon: 'Alan ' }[f.geometry.type] || 'Öğe ') + counter }, f.properties || {}); feats.push(f); sel = feats.length - 1; redraw(); }
+  var drawer = window.HARITA.drawer(api, function (f) { add(f); }, function (verts, mode) {
+    $('#oh-finish').disabled = !(mode && mode !== 'Point' && verts.length >= (mode === 'Polygon' ? 3 : 2));
+    $('#oh-undo').disabled = !(mode && verts.length);
+    if (!mode || !verts.length) return;
+    var g = mode === 'Polygon' && verts.length >= 3 ? { type: 'Polygon', coordinates: [verts.concat([verts[0]])] } : verts.length >= 2 ? { type: 'LineString', coordinates: verts } : null;
+    var m = g ? GD.measure(g) : null;
+    $('#oh-live').textContent = m ? (m.kind === 'line' ? 'Uzunluk: ' + fmtLen(m.length) : 'Alan: ' + fmtArea(m.area) + ' · çevre ' + fmtLen(m.perimeter)) + ' · ' + verts.length + ' nokta' : verts.length + ' nokta';
+  });
+  U.$$('[data-mode]', root).forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('[data-mode]', root).forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+      drawer.setMode(b.getAttribute('data-mode') || null);
+      var m = b.getAttribute('data-mode');
+      $('#oh-live').textContent = !m ? 'Gezinme kipi: haritayı sürükleyip yakınlaştırabilirsiniz.' : m === 'Point' ? 'Nokta eklemek için haritaya tıklayın.' : 'Noktaları tıklayarak ekleyin; çift tıklama ya da Enter ile bitirin, Esc ile vazgeçin.';
+    });
+  });
+  $('#oh-finish').addEventListener('click', function () { drawer.finish(); });
+  $('#oh-undo').addEventListener('click', function () { drawer.undo(); });
+  root.addEventListener('click', function (e) {
+    var d = e.target.closest('[data-del]'); if (d) { feats.splice(+d.getAttribute('data-del'), 1); sel = Math.min(sel, feats.length - 1); redraw(); return; }
+    var tr = e.target.closest('#oh-list tr[data-i]'); if (tr && !e.target.closest('input')) { sel = +tr.getAttribute('data-i'); redraw(); api.fit(api.bboxOf({ features: [feats[sel]] })); }
+  });
+  root.addEventListener('change', function (e) { var n = e.target.getAttribute && e.target.getAttribute('data-name'); if (n != null) { feats[+n].properties.ad = e.target.value; detail(); } });
+  api.ready.then(function () {
+    api.map.on('click', 'cizim-fill', pick); api.map.on('click', 'cizim-line', pick); api.map.on('click', 'cizim-pt', pick);
+  });
+  function pick(e) { if (drawer.mode) return; var i = e.features && e.features[0] && e.features[0].properties.i; if (i != null) { sel = +i; redraw(); } }
+
+  // Dosya aç
+  $('#oh-file').addEventListener('change', function (ev) {
+    var files = Array.prototype.slice.call(ev.target.files); ev.target.value = '';
+    Promise.all(files.map(function (f) { return f.arrayBuffer().then(function (b) { return { name: f.name, data: new Uint8Array(b) }; }); })).then(function (arr) {
+      var r = F.readFiles(arr);
+      if (r.table) { var g = r.table.guess; var t = F.tableToFC(r.table, { a: g.a, b: g.b, z: g.z, wkt: g.wkt, geo: !!g.geo }); r = { fc: t.fc, crs: g.geo ? 'geo-turef' : 'tm-turef-33', crsSure: !!g.geo, warnings: [] }; }
+      var fc = F.reproject(r.fc, r.crs, 'geo-turef'), n = 0;
+      fc.features.forEach(function (f) { if (!f.geometry) return; (f.geometry.type.indexOf('Multi') === 0 ? (f.geometry.coordinates.map(function (c) { return { type: 'Feature', properties: f.properties, geometry: { type: f.geometry.type.slice(5), coordinates: c } }; })) : [f]).forEach(function (x) {
+        var p = x.properties || {}; var nm = p.ad || p.name || p.Name || p.ADI || p.metin || null; add({ type: 'Feature', properties: Object.assign({}, p), geometry: x.geometry }, nm ? String(nm) : null); n++; }); });
+      api.fit(api.bboxOf({ features: feats }));
+      $('#oh-err').hidden = r.crsSure; $('#oh-err').textContent = r.crsSure ? '' : 'Dosyanın koordinat sistemi bilinmiyordu; 3° TM 33 varsayıldı. Konum yanlışsa dosyayı CBS Dosya Dönüştürücü ile doğru sistemi seçerek GeoJSON\'a çevirin.';
+      $('#oh-live').textContent = n + ' öğe yüklendi.';
+    }).catch(function (e) { $('#oh-err').textContent = 'Dosya okunamadı: ' + e.message; $('#oh-err').hidden = false; });
+  });
+  $('#oh-dl').addEventListener('click', function () {
+    var err = $('#oh-err');
+    if (!feats.length) { err.textContent = 'Dışa aktarılacak çizim yok.'; err.hidden = false; return; }
+    try { var r = F.write({ type: 'FeatureCollection', features: feats }, 'geo-turef', { format: $('#oh-fmt').value, crs: $('#oh-crs').value, textField: 'ad', nameField: 'ad', textHeight: 2 }, 'cizim'); err.hidden = true; U.download(r.name, r.data); }
+    catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+  $('#oh-clear').addEventListener('click', function () { feats = []; sel = -1; redraw(); });
+
+  // örnek: Kızılay çevresinde bir alan ve bir mesafe
+  add({ type: 'Feature', properties: { ad: 'Örnek alan – Güvenpark' }, geometry: { type: 'Polygon', coordinates: [[[32.85297, 39.91946], [32.85487, 39.91985], [32.85525, 39.91876], [32.85332, 39.91834], [32.85297, 39.91946]]] } });
+  add({ type: 'Feature', properties: { ad: 'Örnek mesafe' }, geometry: { type: 'LineString', coordinates: [[32.8541, 39.9199], [32.8556, 39.9152], [32.8608, 39.9036]] } });
+  sel = 0; redraw(); api.fit(api.bboxOf({ features: feats }));
 }};
 
-(function(){var s=document.getElementById('t-manyetik');U.subtabs(s);TOOLS['manyetik'].init(s);})();
+(function(){var s=document.getElementById('t-olcharita');U.subtabs(s);TOOLS['olcharita'].init(s);})();

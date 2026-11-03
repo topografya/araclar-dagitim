@@ -386,3 +386,4 @@ header.site-bas .site-ic{position:relative}
   .site-mobil-panel{position:fixed;left:0;right:0;top:0;max-height:100vh;max-height:100dvh;padding:16px}
   .menu-col a{padding:9px 0}
 }
+.maplibregl-cooperative-gesture-screen{font-family:var(--f-display);font-size:17px;font-weight:500;background:rgba(17,17,17,.55)}
