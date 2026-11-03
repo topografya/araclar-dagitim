@@ -374,3 +374,15 @@ header.site-bas .site-ic{position:relative}
 .site-mega-panel{display:none;position:absolute;right:24px;top:calc(100% - 2px);z-index:60;width:min(920px,calc(100vw - 48px));box-sizing:border-box;background:#fff;border:1px solid #111;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:20px 22px 14px;text-align:left}
 .site-mega:hover>.site-mega-panel,.site-mega:focus-within>.site-mega-panel{display:block}
 @media (min-width:961px){header.bar details.menu{display:none}}
+/* Açılır menüler telefonda: üst satırda başlık ve büyük Kapat düğmesi, arkada dokununca kapatan karartılmış zemin */
+.menu-bas{display:none}
+@media (max-width:960px){
+  .menu-bas{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:-16px -16px 12px;padding:12px 16px 10px;position:sticky;top:-16px;z-index:1;background:#fff;border-bottom:1px solid var(--rule);font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .menu-kapat{min-height:44px;min-width:44px;padding:0 14px;border:1px solid #111;background:#fff;color:#111;font:500 15px/1 var(--f-display);letter-spacing:0;text-transform:none;cursor:pointer}
+  details.menu[open]::before,details.site-mobil[open]::before{content:"";position:fixed;inset:0;z-index:45;background:rgba(17,17,17,.35);cursor:pointer}
+  details.menu[open]>summary,details.site-mobil[open]>summary{position:relative;z-index:46}
+  .menu-panel,.site-mobil-panel{z-index:50;overscroll-behavior:contain;box-sizing:border-box}
+  .menu-panel{position:fixed;left:12px;right:12px;top:12px;width:auto;max-height:calc(100vh - 72px);max-height:calc(100dvh - 72px);overflow:auto;padding:16px 16px 12px}
+  .site-mobil-panel{position:fixed;left:0;right:0;top:0;max-height:100vh;max-height:100dvh;padding:16px}
+  .menu-col a{padding:9px 0}
+}
