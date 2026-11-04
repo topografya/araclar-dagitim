@@ -95,6 +95,7 @@ ol.refs a{color:var(--text);text-decoration-color:var(--amber);text-underline-of
 .ad-slot:empty{display:none}
 footer .wrap{border-top:1px solid var(--rule);padding-block:18px 32px;font-size:13px;color:var(--muted)}
 footer p{margin:4px 0;max-width:90ch}
+footer .wrap a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .toast{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--text);color:var(--paper);font-family:var(--f-mono);font-size:13px;padding:8px 12px;z-index:1000}
 .svg-text{font-family:var(--f-mono);font-size:11px;fill:var(--muted)}
 .svg-strong{font-family:var(--f-mono);font-size:12px;fill:var(--text)}
@@ -393,3 +394,28 @@ header.site-bas .site-ic{position:relative}
 .ym-bul:last-child{border-bottom:0}.ym-bul:hover,.ym-bul:focus{background:var(--tint)}
 .ym-bul .meta{flex:none;font-family:var(--f-mono);font-size:12px;color:var(--muted);white-space:nowrap}
 .ym-sonuc .hint{margin:8px 12px}
+/* Site altbilgisi (WordPress footer'ının kopyası) */
+footer.site-alt-bilgi{background:#111;color:#fff;font-family:var(--f-display);padding-block:56px 28px;margin-top:0}
+footer.site-alt-bilgi>.site-ic:not(.alt-son){display:grid;grid-template-columns:minmax(220px,1.1fr) minmax(260px,1.4fr) auto auto;gap:40px 64px;align-items:start}
+footer.site-alt-bilgi a{color:inherit;text-decoration:none}
+footer.site-alt-bilgi a:hover b,footer.site-alt-bilgi .alt-sutun ul a:hover{color:#F2A900}
+footer.site-alt-bilgi a:focus-visible{outline:2px solid #F2A900;outline-offset:3px}
+.alt-logo{display:flex;align-items:center;gap:14px}.alt-logo .site-isaret{width:46px;height:46px}
+.alt-logo .site-ad small{color:#9a9a94}
+.alt-slogan{font-family:var(--f-body);color:#ccc;font-size:15px;margin:22px 0}
+.alt-yazar{display:flex;gap:12px;align-items:center}.alt-yazar img{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#F2A900}
+.alt-yazar span{display:flex;flex-direction:column;line-height:1.3}.alt-yazar b{font-size:15px}
+.alt-yazar small{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#9a9a94}
+.alt-yazar em{font-style:normal;font-size:13px;color:#F2A900;font-weight:700;margin-top:2px}
+.alt-bas{display:inline-block;font-weight:700;font-size:15px;letter-spacing:.04em;margin:0 0 22px;padding-bottom:8px;border-bottom:2px solid #F2A900}
+.alt-sutun ul{list-style:none;margin:0;padding:0;display:grid;gap:14px}
+.alt-sutun ul a{color:#d9d9d4;font-size:15.6px}
+.alt-araclar ul{gap:12px}.alt-araclar a{display:flex;gap:14px;align-items:center}
+.alt-ikon{flex:0 0 44px;height:44px;border:1px solid #333;border-radius:4px;display:grid;place-items:center;color:#F2A900;background:#1a1a1a}.alt-ikon svg{width:24px;height:24px}
+.alt-araclar a span:last-child{display:flex;flex-direction:column;line-height:1.35}
+.alt-araclar b{font-weight:500;font-size:14.5px;color:#e6e6e6}.alt-araclar small{font-size:12.5px;color:#9a9a94}
+.alt-son{display:flex;align-items:center;justify-content:center;position:relative;border-top:1px solid #333;margin-top:44px;padding-top:22px}
+.alt-son p{margin:0;font-family:var(--f-mono);font-size:12px;color:#aaa;text-align:center}
+.alt-yukari{position:absolute;right:max(16px,env(safe-area-inset-right,0px));width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#F2A900;background:#1a1a1a}.alt-yukari svg{width:18px;height:18px}
+@media (max-width:1100px){footer.site-alt-bilgi>.site-ic:not(.alt-son){grid-template-columns:1fr 1fr}}
+@media (max-width:640px){footer.site-alt-bilgi>.site-ic:not(.alt-son){grid-template-columns:1fr 1fr;gap:32px 20px}.alt-marka,.alt-araclar{grid-column:1/-1}.alt-son{justify-content:flex-start;padding-right:48px}}
