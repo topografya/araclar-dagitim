@@ -131,7 +131,10 @@
       var kol = Array.prototype.slice.call(cols.children), mk = kol.filter(function (c) { return c.classList.contains('mapbox') || (c.classList.contains('stack') && c.querySelector(':scope > .mapbox')); })[0];
       if (!mk) return;
       var diger = Math.max.apply(null, kol.filter(function (c) { return c !== mk; }).map(function (c) { return c.scrollHeight; }).concat([0]));
-      mk.classList.toggle('harita-sabit', diger > mk.scrollHeight + 80);
+      // Karar haritanın sabitlenmemiş (doğal) yüksekliğine göre verilir; sabitlenince harita büyüdüğü için
+      // anlık yükseklikle karşılaştırmak 420↔620 px arasında sonsuz bir aç-kapa döngüsü yaratıyordu.
+      if (!mk.classList.contains('harita-sabit') || !mk._dogal) mk._dogal = mk.scrollHeight;
+      mk.classList.toggle('harita-sabit', diger > mk._dogal + 80);
     });
   }
   if (typeof MutationObserver !== 'undefined') {
@@ -153,77 +156,50 @@
 
 
 
-/* Donatı Alanı Standartları arayüzü */
-(window.TOOLS = window.TOOLS || {}).donati = { init: function (root) {
+/* Ortak Noktalarla Dönüşüm arayüzü */
+(window.TOOLS = window.TOOLS || {}).ortaknokta = { init: function (root) {
   'use strict';
-  var D = window.TA.D, K = window.TA.K, U = window.U, SAYI = window.TA.P.sayi, $ = function (s) { return U.$(s, root); };
-  var st = { sonuc: null, t: null };
-  function err(m) { var e = $('#dn-err'); e.textContent = m || ''; e.hidden = !m; }
-  function num(v) { var t = String(v == null ? '' : v).trim(); if (!t) return null; var n = SAYI(t); return isFinite(n) ? n : NaN; }
-  function m2(v) { return U.num(v, 0) + ' m²'; }
-
-  $('#dn-in').innerHTML = '<div class="row r2">' + D.KALEMLER.map(function (k) {
-    return '<label class="f"' + (k.ilButunu ? ' data-il hidden' : '') + '>' + U.esc(k.id === 'yesil' ? 'Açık ve yeşil alanlar (ilçe)' : k.id === 'yesilIl' ? 'Açık ve yeşil alanlar (il bütünü)' : k.ad) + ' (m²)<input data-s="' + k.id + '" inputmode="decimal" placeholder="—"></label>';
-  }).join('') + '</div>';
-
+  var DN = window.TA.DN, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  var st = { r: null, d: null, t: null };
+  function err(m) { var e = $('#on-err'); e.textContent = m || ''; e.hidden = !m; }
+  function oku(id, n) {
+    var out = [];
+    $(id).value.split(/\n/).forEach(function (l, k) {
+      var t = l.trim(); if (!t || t[0] === '#') return;
+      var p = t.split(/[\s;\t]+/);
+      if (p.length < n + 1) throw new Error((k + 1) + '. satır: ad ve ' + n + ' koordinat bekleniyor.');
+      var v = p.slice(1, n + 1).map(function (s) { var x = K.parseNumber(s); if (!isFinite(x)) throw new Error((k + 1) + '. satır: okunamayan değer "' + s + '"'); return x; });
+      out.push(n === 4 ? { ad: p[0], y: v[0], x: v[1], Y: v[2], X: v[3] } : { ad: p[0], y: v[0], x: v[1] });
+    });
+    return out;
+  }
   function hesapla() {
-    err('');
-    var N = num($('#dn-n').value), il = num($('#dn-ilce').value), dop = num($('#dn-dop').value);
-    if (N == null || !(N > 0)) { err('Plan nüfusunu kişi olarak girin.'); temizle(); return; }
-    if (il != null && !(il >= 0)) { err('İlçe nüfusu sayı olmalı.'); return; }
-    var sag = {}, bad = null;
-    U.$$('#dn-in input', root).forEach(function (i) { var v = num(i.value); if (v == null) return; if (!(v >= 0)) bad = 'Ayrılan alanlar m² cinsinden sayı olmalı.'; else sag[i.getAttribute('data-s')] = v; });
-    if (bad) { err(bad); return; }
-    if (dop != null && !(dop >= 0)) { err('DOP\'a tabi yeşil alan sayı olmalı.'); return; }
-    var r;
-    try { r = D.hesapla({ planNufus: N, ilceNufus: il, ilButunu: $('#dn-il').checked, saglanan: sag, yesilKamuDop: dop }); } catch (e) { err(e.message); return; }
-    st.sonuc = r; goster(r);
+    err(''); var r, d;
+    try { r = DN.kestir(oku('#on-o', 4), $('#on-tur').value); d = oku('#on-d', 2).map(function (q) { var t = r.donustur(q); return { ad: q.ad, y: q.y, x: q.x, Y: t.y, X: t.x }; }); }
+    catch (e) { err(e.message); $('#on-out').innerHTML = ''; $('#on-exp').hidden = true; st.r = null; return; }
+    st.r = r; st.d = d;
+    var h = [], mm = function (v) { return U.num(v * 1000, 1) + ' mm'; };
+    var par = r.tur === 'helmert'
+      ? 'Ölçek ' + U.num(r.olcek, 7) + ' (' + (r.olcek >= 1 ? '+' : '') + U.num((r.olcek - 1) * 1e6, 1) + ' ppm) · dönüklük ' + U.num(-r.donukluk * 200 / Math.PI, 5) + 'ᵍ'
+      : 'Ölçek Y ' + U.num(r.olcekY, 6) + ' · X ' + U.num(r.olcekX, 6);
+    h.push('<div class="result-head"><span class="eyebrow">' + (r.tur === 'helmert' ? 'Helmert dönüşümü' : 'Afin dönüşüm') + ' · ' + r.artiklar.length + ' ortak nokta</span><span class="big">m₀ = ' + (r.m0 != null ? '±' + mm(r.m0) : '— (fazla nokta yok)') + '</span><span class="meta">' + par + '</span></div>');
+    var enb = r.artiklar.reduce(function (a, v) { return Math.max(a, v.v); }, 0);
+    h.push('<div class="scroll"><table class="t"><thead><tr><th>Ortak nokta</th><th class="num">v<sub>Y</sub></th><th class="num">v<sub>X</sub></th><th class="num">|v|</th></tr></thead><tbody>' + r.artiklar.map(function (v) {
+      var buyuk = r.m0 != null && r.artiklar.length > 3 && v.v > 3 * r.m0 && v.v === enb;
+      return '<tr' + (buyuk ? ' class="hl"' : '') + '><td class="m">' + U.esc(v.ad) + '</td><td class="num">' + mm(v.vy) + '</td><td class="num">' + mm(v.vx) + '</td><td class="num">' + mm(v.v) + (buyuk ? ' <span class="badge no">kontrol edin</span>' : '') + '</td></tr>';
+    }).join('') + '</tbody></table></div>');
+    if (d.length) h.push('<div class="scroll"><table class="t"><thead><tr><th>Nokta</th><th class="num">y</th><th class="num">x</th><th class="num">Y</th><th class="num">X</th></tr></thead><tbody>' + d.map(function (q) { return '<tr><td class="m">' + U.esc(q.ad) + '</td><td class="num">' + U.num(q.y, 3) + '</td><td class="num">' + U.num(q.x, 3) + '</td><td class="num"><strong>' + U.num(q.Y, 3) + '</strong></td><td class="num"><strong>' + U.num(q.X, 3) + '</strong></td></tr>'; }).join('') + '</tbody></table></div>');
+    var p = r.tur === 'helmert' ? 'Y′ = ' + U.plain(r.a, 4) + ' + ' + U.plain(r.p, 10) + '·y − ' + U.plain(r.q, 10) + '·x\nX′ = ' + U.plain(r.b, 4) + ' + ' + U.plain(r.q, 10) + '·y + ' + U.plain(r.p, 10) + '·x'
+      : 'Y′ = ' + U.plain(r.a1, 4) + ' + ' + U.plain(r.a2, 10) + '·y + ' + U.plain(r.a3, 10) + '·x\nX′ = ' + U.plain(r.b1, 4) + ' + ' + U.plain(r.b2, 10) + '·y + ' + U.plain(r.b3, 10) + '·x';
+    h.push('<div class="formula">' + U.esc(p) + '</div>');
+    $('#on-out').innerHTML = h.join(''); $('#on-exp').hidden = !d.length;
   }
-  function temizle() { $('#dn-out').innerHTML = ''; $('#dn-exp').hidden = true; st.sonuc = null; }
-  function goster(r) {
-    var h = [], anySag = r.satirlar.some(function (x) { return x.saglanan != null; });
-    h.push('<div class="result-head"><span class="eyebrow">Nüfus grubu ' + U.esc(r.grupAd) + '</span><span class="big">' + m2(r.toplamGereken) + '</span><span class="meta">' + U.num(r.planNufus, 0) + ' kişi × ' + U.num(r.toplamStd, 2) + ' m²/kişi · ' + U.num(r.toplamGereken / 10000, 2) + ' ha asgari donatı alanı</span></div>');
-    h.push('<div class="scroll"><table class="t"><thead><tr><th>Donatı</th><th class="num">m²/kişi</th><th class="num">Gereken</th>' + (anySag ? '<th class="num">Ayrılan</th><th class="num">Fark</th><th></th>' : '') + '</tr></thead><tbody>');
-    r.satirlar.forEach(function (x) {
-      var alt = '';
-      h.push('<tr><td title="' + U.esc(x.ad) + '">' + U.esc(x.kisa) + alt + '</td><td class="num">' + U.num(x.std, 2) + '</td><td class="num">' + m2(x.gereken) + '</td>' +
-        (anySag ? (x.saglanan == null ? '<td class="num">—</td><td></td><td></td>' : '<td class="num">' + m2(x.saglanan) + '<br><span class="m">' + U.num(x.kisiBasi, 2) + ' m²/kişi</span></td><td class="num">' + (x.fark >= 0 ? '+' : '') + U.num(x.fark, 0) + '</td><td class="dn-uyg">' + (x.uygun ? '<span class="badge ok">yeterli</span>' : '<span class="badge no">eksik</span>') + '</td>') : '') + '</tr>');
-    });
-    h.push('<tr class="hl"><td><strong>Toplam</strong></td><td class="num"><strong>' + U.num(r.toplamStd, 2) + '</strong></td><td class="num"><strong>' + m2(r.toplamGereken) + '</strong></td>' +
-      (anySag ? '<td class="num">' + (r.toplamSaglanan != null ? m2(r.toplamSaglanan) : '—') + '</td><td class="num">' + (r.toplamSaglanan != null ? (r.toplamSaglanan - r.toplamGereken >= 0 ? '+' : '') + U.num(r.toplamSaglanan - r.toplamGereken, 0) : '') + '</td><td></td>' : '') + '</tr></tbody></table></div>');
-    var y = '<tr><td>DOP\'a tabi kamusal çocuk bahçesi, oyun alanı, park, meydan, semt spor alanı — en az %75</td><td class="num">' + m2(r.yesilKamuEnAz) + '</td>' +
-      (r.yesilKamuDop != null ? '<td class="num">' + m2(r.yesilKamuDop) + '</td><td>' + (r.yesilKamuUygun ? '<span class="badge ok">yeterli</span>' : '<span class="badge no">eksik</span>') + '</td>' : '<td></td><td></td>') + '<td class="m">açıklama 9</td></tr>';
-    h.push('<div class="scroll"><table class="t"><tbody>' + y + '</tbody></table></div>');
-    var bh = []; r.satirlar.forEach(function (x) { x.birimler.forEach(function (b, i) { bh.push('<tr><td>' + (i ? '' : U.esc(x.ad)) + '</td><td>' + U.esc(b.ad) + '</td><td class="num">' + U.esc(b.alan) + ' m²</td></tr>'); }); });
-    h.push('<details class="im-adv"><summary>Tesis başına asgari birim alanlar (EK-2, ' + U.esc(r.grupAd) + ')</summary><div class="scroll" style="margin-top:10px"><table class="t"><thead><tr><th>Donatı</th><th>Tesis</th><th class="num">Asgari birim alan</th></tr></thead><tbody>' + bh.join('') + '</tbody></table></div></details>');
-    var notlar = r.notlar.slice(); r.satirlar.forEach(function (x) { if (x.not) notlar.push(x.not); });
-    if (notlar.length) h.push('<ul class="im-notes">' + notlar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
-    if (r.uyarilar.length) h.push('<ul class="warnlist">' + r.uyarilar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
-    $('#dn-out').innerHTML = h.join(''); $('#dn-exp').hidden = false;
-  }
-  $('#dn-yogbtn').addEventListener('click', function () {
-    var rows = [], bad = null;
-    $('#dn-yog').value.split(/\n/).forEach(function (l) {
-      var t = l.trim(); if (!t) return; var p = t.split(/[\s;\t]+/);
-      var a = SAYI(p[0]), d = SAYI(p[1]);
-      if (p.length < 2 || !(a > 0) || !(d >= 0)) bad = 'Okunamayan satır: "' + t + '"'; else rows.push({ alan: a, yogunluk: d });
-    });
-    if (bad) { err(bad); return; }
-    if (!rows.length) { err('Alan (ha) ve yoğunluk (kişi/ha) satırları girin.'); return; }
-    var n = Math.round(D.nufus(rows));
-    $('#dn-n').value = U.num(n, 0); $('#dn-yogout').textContent = rows.length + ' bölge, ' + U.num(n, 0) + ' kişi'; hesapla();
-  });
-  $('#dn-csv').addEventListener('click', function () {
-    var r = st.sonuc; if (!r) return;
-    var rows = [['donati', 'm2_kisi', 'gereken_m2', 'ayrilan_m2', 'fark_m2']];
-    r.satirlar.forEach(function (x) { rows.push([x.ad, x.std, x.gereken.toFixed(2), x.saglanan == null ? '' : x.saglanan.toFixed(2), x.fark == null ? '' : x.fark.toFixed(2)]); });
-    rows.push(['TOPLAM', r.toplamStd, r.toplamGereken.toFixed(2), r.toplamSaglanan == null ? '' : r.toplamSaglanan.toFixed(2), '']);
-    rows.push(['nufus_grubu: ' + r.grupAd, '', '', '', ''], ['plan_nufusu', r.planNufus, '', '', '']);
-    U.download('donati_alanlari.csv', U.csvRapor(rows));
-  });
-  $('#dn-il').addEventListener('change', function () { U.$$('[data-il]', root).forEach(function (e) { e.hidden = !$('#dn-il').checked; }); hesapla(); });
-  root.addEventListener('input', function (e) { if (e.target.closest('#dn-yog')) return; if (e.target.matches('input:not([type=checkbox])')) { clearTimeout(st.t); st.t = setTimeout(hesapla, 250); } });
+  function metin(sep) { return st.d.map(function (q) { return [q.ad, q.Y.toFixed(3), q.X.toFixed(3)].join(sep); }).join('\r\n'); }
+  $('#on-csv').addEventListener('click', function () { if (st.d) U.download('donusturulen_noktalar.csv', '﻿nokta;Y;X\r\n' + metin(';') + '\r\n'); });
+  $('#on-copy').addEventListener('click', function () { if (st.d) U.copy(metin('\t')); });
+  $('#on-tur').addEventListener('change', hesapla);
+  root.addEventListener('input', function (e) { if (e.target.matches('textarea')) { clearTimeout(st.t); st.t = setTimeout(hesapla, 300); } });
   hesapla();
 }};
 
-(function(){var s=document.getElementById('t-donati');U.subtabs(s);TOOLS['donati'].init(s);})();
+(function(){var s=document.getElementById('t-ortaknokta');U.subtabs(s);TOOLS['ortaknokta'].init(s);})();

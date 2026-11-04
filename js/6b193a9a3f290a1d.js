@@ -131,7 +131,10 @@
       var kol = Array.prototype.slice.call(cols.children), mk = kol.filter(function (c) { return c.classList.contains('mapbox') || (c.classList.contains('stack') && c.querySelector(':scope > .mapbox')); })[0];
       if (!mk) return;
       var diger = Math.max.apply(null, kol.filter(function (c) { return c !== mk; }).map(function (c) { return c.scrollHeight; }).concat([0]));
-      mk.classList.toggle('harita-sabit', diger > mk.scrollHeight + 80);
+      // Karar haritanın sabitlenmemiş (doğal) yüksekliğine göre verilir; sabitlenince harita büyüdüğü için
+      // anlık yükseklikle karşılaştırmak 420↔620 px arasında sonsuz bir aç-kapa döngüsü yaratıyordu.
+      if (!mk.classList.contains('harita-sabit') || !mk._dogal) mk._dogal = mk.scrollHeight;
+      mk.classList.toggle('harita-sabit', diger > mk._dogal + 80);
     });
   }
   if (typeof MutationObserver !== 'undefined') {
@@ -153,70 +156,77 @@
 
 
 
-/* Geriden Kestirme ve Aplikasyon arayüzü */
-(window.TOOLS = window.TOOLS || {}).kestirme = { init: function (root) {
+/* Donatı Alanı Standartları arayüzü */
+(window.TOOLS = window.TOOLS || {}).donati = { init: function (root) {
   'use strict';
-  var KS = window.TA.KS, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var st = { mode: 'geri', tablo: null, t: null };
-  function unit() { return $('#ks-unit').value; }
-  function aci(t) { if (unit() === 'grad') return K.parseNumber(String(t).replace(/\s*(grad|gon|g|ᵍ)\s*$/i, '')); var d = K.parseAngle(t, 'none'); return d * 400 / 360; }
-  function aciYaz(g) { return unit() === 'grad' ? U.num(g, 4) + 'ᵍ' : K.fmtDMS(g * 360 / 400, null, 1); }
-  function kucuk(g) { return unit() === 'grad' ? U.num(g * 10000, 1) + 'ᶜᶜ' : U.num(g * 360 / 400 * 3600, 1) + '″'; }
-  function n(id) { var v = K.parseNumber(String($(id).value || '').trim()); if (!isFinite(v)) throw new Error('Koordinat ve açı alanlarına sayı girin.'); return v; }
-  function satirlar(id, alanlar) { // alanlar: ['y','x','r'] vb.
-    var out = [];
-    $(id).value.split(/\n/).forEach(function (l, k) {
-      var p = l.trim().split(/[\s;\t]+/); if (!p[0]) return;
-      if (p.length < alanlar.length + 1) throw new Error((k + 1) + '. satır: ad ve ' + alanlar.length + ' değer bekleniyor.');
-      var o = { ad: p[0] };
-      alanlar.forEach(function (a, i) { var v = a === 'r' ? aci(p[i + 1]) : K.parseNumber(p[i + 1]); if (!isFinite(v)) throw new Error((k + 1) + '. satır: okunamayan değer "' + p[i + 1] + '"'); o[a] = v; });
-      out.push(o);
-    });
-    return out;
-  }
-  function hata(id, m) { var e = $(id); e.textContent = m || ''; e.hidden = !m; }
-  function tablo(bas, rows) { return '<div class="scroll"><table class="t"><thead><tr>' + bas.map(function (b, i) { return '<th' + (i ? ' class="num"' : '') + '>' + b + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i ? ' class="num"' : ' class="m"') + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>'; }
+  var D = window.TA.D, K = window.TA.K, U = window.U, SAYI = window.TA.P.sayi, $ = function (s) { return U.$(s, root); };
+  var st = { sonuc: null, t: null };
+  function err(m) { var e = $('#dn-err'); e.textContent = m || ''; e.hidden = !m; }
+  function num(v) { var t = String(v == null ? '' : v).trim(); if (!t) return null; var n = SAYI(t); return isFinite(n) ? n : NaN; }
+  function m2(v) { return U.num(v, 0) + ' m²'; }
 
-  function geri() {
-    hata('#ks-gerr', ''); var r, pts;
-    try { pts = satirlar('#ks-g', ['y', 'x', 'r']); r = KS.geriden(pts); } catch (e) { hata('#ks-gerr', e.message); $('#ks-gout').innerHTML = ''; st.tablo = null; return; }
-    var h = ['<div class="result-head"><span class="eyebrow">Durulan nokta' + (r.serbestlik ? ' · ' + pts.length + ' nokta, ' + r.serbestlik + ' fazla ölçü' : ' · fazla ölçü yok') + '</span><span class="big">Y ' + U.num(r.P.y, 3) + ' · X ' + U.num(r.P.x, 3) + '</span><span class="meta">Yöneltme bilinmeyeni z = ' + aciYaz(r.z) + (r.m0 != null ? ' · m₀ = ±' + kucuk(r.m0) : '') + (r.konum ? ' · konum ±' + U.num(r.konum.mp * 1000, 1) + ' mm' : '') + '</span></div>'];
-    h.push(tablo(['Nokta', 'Semt t', 'Kenar s', 'Düzeltme v'], pts.map(function (p, i) { return [U.esc(p.ad), aciYaz(KS.semt(r.P, p)), U.num(Math.hypot(p.y - r.P.y, p.x - r.P.x), 3) + ' m', kucuk(r.artiklar[i])]; })));
-    if (r.konum) h.push('<p class="hint">Koordinat ortalama hataları: m<sub>Y</sub> = ±' + U.num(r.konum.my * 1000, 1) + ' mm, m<sub>X</sub> = ±' + U.num(r.konum.mx * 1000, 1) + ' mm (eşit ağırlıklı doğrultular).</p>');
-    if (!r.serbestlik) h.push('<p class="hint">Üç noktayla çözümde denetim yoktur; dördüncü bir noktaya da bakarak sonucu sınayın.</p>');
+  $('#dn-in').innerHTML = '<div class="row r2">' + D.KALEMLER.map(function (k) {
+    return '<label class="f"' + (k.ilButunu ? ' data-il hidden' : '') + '>' + U.esc(k.id === 'yesil' ? 'Açık ve yeşil alanlar (ilçe)' : k.id === 'yesilIl' ? 'Açık ve yeşil alanlar (il bütünü)' : k.ad) + ' (m²)<input data-s="' + k.id + '" inputmode="decimal" placeholder="—"></label>';
+  }).join('') + '</div>';
+
+  function hesapla() {
+    err('');
+    var N = num($('#dn-n').value), il = num($('#dn-ilce').value), dop = num($('#dn-dop').value);
+    if (N == null || !(N > 0)) { err('Plan nüfusunu kişi olarak girin.'); temizle(); return; }
+    if (il != null && !(il >= 0)) { err('İlçe nüfusu sayı olmalı.'); return; }
+    var sag = {}, bad = null;
+    U.$$('#dn-in input', root).forEach(function (i) { var v = num(i.value); if (v == null) return; if (!(v >= 0)) bad = 'Ayrılan alanlar m² cinsinden sayı olmalı.'; else sag[i.getAttribute('data-s')] = v; });
+    if (bad) { err(bad); return; }
+    if (dop != null && !(dop >= 0)) { err('DOP\'a tabi yeşil alan sayı olmalı.'); return; }
+    var r;
+    try { r = D.hesapla({ planNufus: N, ilceNufus: il, ilButunu: $('#dn-il').checked, saglanan: sag, yesilKamuDop: dop }); } catch (e) { err(e.message); return; }
+    st.sonuc = r; goster(r);
+  }
+  function temizle() { $('#dn-out').innerHTML = ''; $('#dn-exp').hidden = true; st.sonuc = null; }
+  function goster(r) {
+    var h = [], anySag = r.satirlar.some(function (x) { return x.saglanan != null; });
+    h.push('<div class="result-head"><span class="eyebrow">Nüfus grubu ' + U.esc(r.grupAd) + '</span><span class="big">' + m2(r.toplamGereken) + '</span><span class="meta">' + U.num(r.planNufus, 0) + ' kişi × ' + U.num(r.toplamStd, 2) + ' m²/kişi · ' + U.num(r.toplamGereken / 10000, 2) + ' ha asgari donatı alanı</span></div>');
+    h.push('<div class="scroll"><table class="t"><thead><tr><th>Donatı</th><th class="num">m²/kişi</th><th class="num">Gereken</th>' + (anySag ? '<th class="num">Ayrılan</th><th class="num">Fark</th><th></th>' : '') + '</tr></thead><tbody>');
+    r.satirlar.forEach(function (x) {
+      var alt = '';
+      h.push('<tr><td title="' + U.esc(x.ad) + '">' + U.esc(x.kisa) + alt + '</td><td class="num">' + U.num(x.std, 2) + '</td><td class="num">' + m2(x.gereken) + '</td>' +
+        (anySag ? (x.saglanan == null ? '<td class="num">—</td><td></td><td></td>' : '<td class="num">' + m2(x.saglanan) + '<br><span class="m">' + U.num(x.kisiBasi, 2) + ' m²/kişi</span></td><td class="num">' + (x.fark >= 0 ? '+' : '') + U.num(x.fark, 0) + '</td><td class="dn-uyg">' + (x.uygun ? '<span class="badge ok">yeterli</span>' : '<span class="badge no">eksik</span>') + '</td>') : '') + '</tr>');
+    });
+    h.push('<tr class="hl"><td><strong>Toplam</strong></td><td class="num"><strong>' + U.num(r.toplamStd, 2) + '</strong></td><td class="num"><strong>' + m2(r.toplamGereken) + '</strong></td>' +
+      (anySag ? '<td class="num">' + (r.toplamSaglanan != null ? m2(r.toplamSaglanan) : '—') + '</td><td class="num">' + (r.toplamSaglanan != null ? (r.toplamSaglanan - r.toplamGereken >= 0 ? '+' : '') + U.num(r.toplamSaglanan - r.toplamGereken, 0) : '') + '</td><td></td>' : '') + '</tr></tbody></table></div>');
+    var y = '<tr><td>DOP\'a tabi kamusal çocuk bahçesi, oyun alanı, park, meydan, semt spor alanı — en az %75</td><td class="num">' + m2(r.yesilKamuEnAz) + '</td>' +
+      (r.yesilKamuDop != null ? '<td class="num">' + m2(r.yesilKamuDop) + '</td><td>' + (r.yesilKamuUygun ? '<span class="badge ok">yeterli</span>' : '<span class="badge no">eksik</span>') + '</td>' : '<td></td><td></td>') + '<td class="m">açıklama 9</td></tr>';
+    h.push('<div class="scroll"><table class="t"><tbody>' + y + '</tbody></table></div>');
+    var bh = []; r.satirlar.forEach(function (x) { x.birimler.forEach(function (b, i) { bh.push('<tr><td>' + (i ? '' : U.esc(x.ad)) + '</td><td>' + U.esc(b.ad) + '</td><td class="num">' + U.esc(b.alan) + ' m²</td></tr>'); }); });
+    h.push('<details class="im-adv"><summary>Tesis başına asgari birim alanlar (EK-2, ' + U.esc(r.grupAd) + ')</summary><div class="scroll" style="margin-top:10px"><table class="t"><thead><tr><th>Donatı</th><th>Tesis</th><th class="num">Asgari birim alan</th></tr></thead><tbody>' + bh.join('') + '</tbody></table></div></details>');
+    var notlar = r.notlar.slice(); r.satirlar.forEach(function (x) { if (x.not) notlar.push(x.not); });
+    if (notlar.length) h.push('<ul class="im-notes">' + notlar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
     if (r.uyarilar.length) h.push('<ul class="warnlist">' + r.uyarilar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
-    $('#ks-gout').innerHTML = h.join('');
-    st.tablo = [['nokta', 'Y', 'X'], ['P', r.P.y.toFixed(3), r.P.x.toFixed(3)]];
+    $('#dn-out').innerHTML = h.join(''); $('#dn-exp').hidden = false;
   }
-  function kut() {
-    hata('#ks-kerr', ''); var r;
-    try { var S = { y: n('#ks-ky'), x: n('#ks-kx') }; r = KS.kutupsal(S, satirlar('#ks-kb', ['y', 'x', 'r']), satirlar('#ks-ka', ['r', 's'])); } catch (e) { hata('#ks-kerr', e.message); $('#ks-kout').innerHTML = ''; st.tablo = null; return; }
-    var h = ['<div class="result-head"><span class="eyebrow">Kutupsal alım · ' + r.noktalar.length + ' nokta</span><span class="big">z = ' + aciYaz(r.z) + '</span><span class="meta">Yöneltme artıkları: ' + r.yoneltmeArtik.map(kucuk).join(', ') + '</span></div>'];
-    h.push(tablo(['Nokta', 'Semt t', 'Mesafe', 'Y', 'X'], r.noktalar.map(function (p) { return [U.esc(p.ad), aciYaz(p.t), U.num(p.s, 3), '<strong>' + U.num(p.y, 3) + '</strong>', '<strong>' + U.num(p.x, 3) + '</strong>']; })));
-    $('#ks-kout').innerHTML = h.join('');
-    st.tablo = [['nokta', 'Y', 'X']].concat(r.noktalar.map(function (p) { return [p.ad, p.y.toFixed(3), p.x.toFixed(3)]; }));
-  }
-  function apl() {
-    hata('#ks-aerr', ''); var r;
-    try { var S = { y: n('#ks-ay'), x: n('#ks-ax') }, B = { y: n('#ks-by'), x: n('#ks-bx') }; var rb = aci($('#ks-br').value || '0'); if (!isFinite(rb)) throw new Error('Bakışta okunan değeri girin.'); r = KS.aplikasyon(S, B, rb, satirlar('#ks-ah', ['y', 'x'])); } catch (e) { hata('#ks-aerr', e.message); $('#ks-aout').innerHTML = ''; st.tablo = null; return; }
-    var h = ['<div class="result-head"><span class="eyebrow">Aplikasyon ölçüleri</span><span class="big">' + r.length + ' nokta</span><span class="meta">Alet bakış noktasına ' + aciYaz(aci($('#ks-br').value || '0')) + ' okunarak yöneltilmiş kabul edilir.</span></div>'];
-    h.push(tablo(['Nokta', 'Okunacak doğrultu', 'Yatay mesafe', 'Semt t'], r.map(function (p) { return [U.esc(p.ad), '<strong>' + aciYaz(p.r) + '</strong>', '<strong>' + U.num(p.s, 3) + ' m</strong>', aciYaz(p.t)]; })));
-    $('#ks-aout').innerHTML = h.join('');
-    st.tablo = [['nokta', 'dogrultu_' + unit(), 'mesafe_m']].concat(r.map(function (p) { return [p.ad, unit() === 'grad' ? p.r.toFixed(4) : (p.r * 0.9).toFixed(6), p.s.toFixed(3)]; }));
-  }
-  function hesapla() { if (st.mode === 'geri') geri(); else if (st.mode === 'kut') kut(); else apl(); }
-  $('#ks-csv').addEventListener('click', function () { if (st.tablo) U.download('kestirme_' + st.mode + '.csv', U.csvRapor(st.tablo)); });
-  $('#ks-copy').addEventListener('click', function () { if (st.tablo) U.copy(st.tablo.map(function (r) { return r.join('\t'); }).join('\n')); });
-  U.$('.subtabs[data-group="ks"]', root).addEventListener('tabchange', function (e) { st.mode = e.detail; hesapla(); });
-  $('#ks-unit').addEventListener('change', function () {
-    var eski = unit() === 'grad' ? 'deg' : 'grad';
-    function cev(v) { var g = eski === 'grad' ? K.parseNumber(v) : K.parseAngle(v, 'none') * 400 / 360; if (!isFinite(g)) return v; return unit() === 'grad' ? U.num(g, 4).replace(/\./g, '') : K.fmtDMS(g * 360 / 400, null, 1).replace(/\s+/g, ''); }
-    [['#ks-g', 3], ['#ks-kb', 3], ['#ks-ka', 1]].forEach(function (a) { $(a[0]).value = $(a[0]).value.split(/\n/).map(function (l) { var p = l.trim().split(/[\s;\t]+/); if (p.length > a[1]) p[a[1]] = cev(p[a[1]]); return p.join('  '); }).join('\n'); });
-    $('#ks-br').value = cev($('#ks-br').value || '0');
-    hesapla();
+  $('#dn-yogbtn').addEventListener('click', function () {
+    var rows = [], bad = null;
+    $('#dn-yog').value.split(/\n/).forEach(function (l) {
+      var t = l.trim(); if (!t) return; var p = t.split(/[\s;\t]+/);
+      var a = SAYI(p[0]), d = SAYI(p[1]);
+      if (p.length < 2 || !(a > 0) || !(d >= 0)) bad = 'Okunamayan satır: "' + t + '"'; else rows.push({ alan: a, yogunluk: d });
+    });
+    if (bad) { err(bad); return; }
+    if (!rows.length) { err('Alan (ha) ve yoğunluk (kişi/ha) satırları girin.'); return; }
+    var n = Math.round(D.nufus(rows));
+    $('#dn-n').value = U.num(n, 0); $('#dn-yogout').textContent = rows.length + ' bölge, ' + U.num(n, 0) + ' kişi'; hesapla();
   });
-  root.addEventListener('input', function (e) { if (e.target.matches('input, textarea')) { clearTimeout(st.t); st.t = setTimeout(hesapla, 300); } });
+  $('#dn-csv').addEventListener('click', function () {
+    var r = st.sonuc; if (!r) return;
+    var rows = [['donati', 'm2_kisi', 'gereken_m2', 'ayrilan_m2', 'fark_m2']];
+    r.satirlar.forEach(function (x) { rows.push([x.ad, x.std, x.gereken.toFixed(2), x.saglanan == null ? '' : x.saglanan.toFixed(2), x.fark == null ? '' : x.fark.toFixed(2)]); });
+    rows.push(['TOPLAM', r.toplamStd, r.toplamGereken.toFixed(2), r.toplamSaglanan == null ? '' : r.toplamSaglanan.toFixed(2), '']);
+    rows.push(['nufus_grubu: ' + r.grupAd, '', '', '', ''], ['plan_nufusu', r.planNufus, '', '', '']);
+    U.download('donati_alanlari.csv', U.csvRapor(rows));
+  });
+  $('#dn-il').addEventListener('change', function () { U.$$('[data-il]', root).forEach(function (e) { e.hidden = !$('#dn-il').checked; }); hesapla(); });
+  root.addEventListener('input', function (e) { if (e.target.closest('#dn-yog')) return; if (e.target.matches('input:not([type=checkbox])')) { clearTimeout(st.t); st.t = setTimeout(hesapla, 250); } });
   hesapla();
 }};
 
-(function(){var s=document.getElementById('t-kestirme');U.subtabs(s);TOOLS['kestirme'].init(s);})();
+(function(){var s=document.getElementById('t-donati');U.subtabs(s);TOOLS['donati'].init(s);})();

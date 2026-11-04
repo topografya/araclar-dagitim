@@ -131,7 +131,10 @@
       var kol = Array.prototype.slice.call(cols.children), mk = kol.filter(function (c) { return c.classList.contains('mapbox') || (c.classList.contains('stack') && c.querySelector(':scope > .mapbox')); })[0];
       if (!mk) return;
       var diger = Math.max.apply(null, kol.filter(function (c) { return c !== mk; }).map(function (c) { return c.scrollHeight; }).concat([0]));
-      mk.classList.toggle('harita-sabit', diger > mk.scrollHeight + 80);
+      // Karar haritanın sabitlenmemiş (doğal) yüksekliğine göre verilir; sabitlenince harita büyüdüğü için
+      // anlık yükseklikle karşılaştırmak 420↔620 px arasında sonsuz bir aç-kapa döngüsü yaratıyordu.
+      if (!mk.classList.contains('harita-sabit') || !mk._dogal) mk._dogal = mk.scrollHeight;
+      mk.classList.toggle('harita-sabit', diger > mk._dogal + 80);
     });
   }
   if (typeof MutationObserver !== 'undefined') {
@@ -153,118 +156,50 @@
 
 
 
-/* Yapı Yaklaşık Maliyeti arayüzü */
-(window.TOOLS = window.TOOLS || {}).maliyet = { init: function (root) {
+/* Nivelman Hesabı arayüzü */
+(window.TOOLS = window.TOOLS || {}).nivelman = { init: function (root) {
   'use strict';
-  var M = window.TA.M, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var st = { rows: [], sonuc: null, t: null, odak: null }, seq = 0;
-  function err(m) { var e = $('#ym-err'); e.textContent = m || ''; e.hidden = !m; }
-  function num(v) { var t = String(v == null ? '' : v).trim(); if (!t) return null; var n = K.parseNumber(t, { tr: true }); return isFinite(n) ? n : NaN; }
-  function tl(v) { return U.num(v, 2) + ' TL'; }
-
-  // Seçim listesi: sınıf ve grup başlığı altında tebliğdeki yapılar (değer "III-B|11")
-  var optHtml = '<option value="">Seçin…</option>' + M.GRUPLAR.map(function (g) {
-    return '<optgroup label="' + g.sinif + '. sınıf (' + g.grup + ') grubu · ' + U.num(g.bm, 0) + ' TL/m²">' +
-      g.yapilar.map(function (y, i) { return '<option value="' + g.kod + '|' + i + '">' + U.esc(y) + '</option>'; }).join('') + '</optgroup>';
-  }).join('');
-  function satirHtml(r) {
-    return '<div class="op-row card" data-k="' + r.k + '">' +
-      '<label class="f">Yapı türü (sınıf ve grup)<select data-f="sec">' + optHtml.replace('value="' + r.sec + '"', 'value="' + r.sec + '" selected') + '</select></label>' +
-      '<div class="row r2" style="align-items:end"><label class="f">İnşaat alanı (m²)<input data-f="alan" inputmode="decimal" value="' + U.esc(r.alan || '') + '" placeholder="ör. 1.250"></label>' +
-      '<div class="f" style="justify-content:flex-end;align-items:flex-end">' + (st.rows.length > 1 ? '<button class="btn ghost sm" type="button" data-sil="' + r.k + '" aria-label="Yapıyı kaldır">Kaldır</button>' : '') + '</div></div></div>';
-  }
-  function ciz() { $('#ym-rows').innerHTML = st.rows.map(satirHtml).join(''); }
-  function ekle(r) { r.k = ++seq; st.rows.push(r); return r; }
-  function bul(k) { return st.rows.filter(function (r) { return r.k === +k; })[0]; }
-  function hedef() { return bul(st.odak) || st.rows[0]; }
-
-  $('#ym-rows').addEventListener('focusin', function (e) { var row = e.target.closest('[data-k]'); if (row) st.odak = +row.getAttribute('data-k'); });
-  $('#ym-rows').addEventListener('input', function (e) {
-    var t = e.target, f = t.getAttribute('data-f'), row = t.closest('[data-k]'); if (!f || !row) return;
-    bul(row.getAttribute('data-k'))[f] = t.value;
-    if (f === 'sec') hesapla(); else { clearTimeout(st.t); st.t = setTimeout(hesapla, 250); }
-  });
-  $('#ym-rows').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-sil]'); if (!b) return;
-    st.rows = st.rows.filter(function (r) { return r.k !== +b.getAttribute('data-sil'); }); ciz(); hesapla();
-  });
-  $('#ym-add').addEventListener('click', function () { var r = ekle({ sec: '', alan: '' }); st.odak = r.k; ciz(); var s = U.$$('#ym-rows select', root).pop(); if (s) s.focus(); });
-
-  // Arama: sonuca tıklayınca seçili (son odaklanılan) satıra yazılır
-  function aramaCiz() {
-    var q = $('#ym-ara').value, box = $('#ym-sonuc'), a = M.ara(q).slice(0, 12);
-    if (!q.trim()) { box.hidden = true; box.innerHTML = ''; return; }
-    box.hidden = false;
-    box.innerHTML = a.length ? a.map(function (x) { return '<button type="button" class="ym-bul" data-sec="' + x.kod + '|' + x.i + '"><span>' + U.esc(x.ad) + '</span><span class="meta">' + x.kod + ' · ' + U.num(x.bm, 0) + ' TL/m²</span></button>'; }).join('') :
-      '<p class="hint">Eşleşen yapı yok. Tebliğde olmayan yapılar benzer gruptaki yapılara kıyasla belirlenir.</p>';
-  }
-  $('#ym-ara').addEventListener('input', aramaCiz);
-  $('#ym-sonuc').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-sec]'); if (!b) return;
-    var r = hedef(); r.sec = b.getAttribute('data-sec'); ciz(); hesapla();
-    $('#ym-ara').value = ''; aramaCiz();
-    var inp = U.$('[data-k="' + r.k + '"] [data-f="alan"]', root); if (inp && !inp.value) inp.focus();
-  });
-
-  // Grup yardımcısı
-  function yardimSync() { var m = $('#ym-tur').value === 'mustakil'; $('#ym-katw').hidden = m; $('#ym-bbw').hidden = !m; oneriCiz(); }
-  function oneri() {
-    var tur = $('#ym-tur').value;
-    if (tur === 'mustakil') return M.oner(tur, { bbAlan: num($('#ym-bb').value) });
-    return M.oner(tur, { kat: num($('#ym-kat').value), yukseklik: num($('#ym-h').value) });
-  }
-  function oneriSecimi(kod) {
-    var tur = $('#ym-tur').value, g = M.BY_KOD[kod], re = tur === 'mustakil' ? /^Müstakil/ : tur === 'konut' ? /^Konutlar/ : /^İş merkezleri/;
-    for (var i = 0; i < g.yapilar.length; i++) if (re.test(g.yapilar[i])) return kod + '|' + i;
-    return null;
-  }
-  function oneriCiz() {
-    var o = $('#ym-oneri');
-    try { var kod = oneri(), g = M.BY_KOD[kod]; o.textContent = kod + ' grubu · ' + U.num(g.bm, 0) + ' TL/m²'; $('#ym-uygula').disabled = false; }
-    catch (e) { o.textContent = e.message; $('#ym-uygula').disabled = true; }
-  }
-  ['#ym-tur'].forEach(function (s) { $(s).addEventListener('change', yardimSync); });
-  ['#ym-kat', '#ym-h', '#ym-bb'].forEach(function (s) { $(s).addEventListener('input', oneriCiz); });
-  $('#ym-uygula').addEventListener('click', function () {
-    try { var sec = oneriSecimi(oneri()); if (!sec) return; var r = st.rows[0]; r.sec = sec; ciz(); hesapla(); } catch (e) { err(e.message); }
-  });
-
+  var NV = window.TA.NV, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  var st = { r: null, t: null };
+  function err(m) { var e = $('#nv-err'); e.textContent = m || ''; e.hidden = !m; }
+  function num(id) { var t = String($(id).value || '').trim(); if (!t) return null; var n = K.parseNumber(t); return isFinite(n) ? n : NaN; }
+  function v3(x) { return isFinite(x) ? U.num(x, 3) : ''; }
   function hesapla() {
     err('');
-    var satirlar = [], hata = null;
-    st.rows.forEach(function (r, i) {
-      if (hata || !r.sec) return;
-      var a = num(r.alan); if (a == null) return;
-      if (!(a > 0)) { hata = (i + 1) + '. yapı: inşaat alanını pozitif bir sayı olarak girin (ör. 1.250,50).'; return; }
-      var p = r.sec.split('|'); satirlar.push({ kod: p[0], alan: a, ad: M.BY_KOD[p[0]].yapilar[+p[1]] });
-    });
-    if (hata) { err(hata); $('#ym-out').innerHTML = ''; $('#ym-exp').hidden = true; st.sonuc = null; return; }
-    if (!satirlar.length) { $('#ym-out').innerHTML = '<p class="hint">Yapı türünü seçip inşaat alanını girin.</p>'; $('#ym-exp').hidden = true; st.sonuc = null; return; }
-    var r; try { r = M.hesapla(satirlar); } catch (e) { err(e.message); return; }
-    st.sonuc = r; goster(r);
+    var r, h1 = num('#nv-h1'), h2 = num('#nv-h2');
+    try {
+      if (h1 == null || !isFinite(h1)) throw new Error('Başlangıç kotunu girin.');
+      if (h2 != null && !isFinite(h2)) throw new Error('Bitiş kotu sayı olmalı.');
+      r = NV.hesapla({ satirlar: NV.defterOku($('#nv-d').value, K.parseNumber), Hilk: h1, Hson: h2 == null ? NaN : h2, sinif: $('#nv-sinif').value });
+    } catch (e) { err(e.message); $('#nv-out').innerHTML = ''; $('#nv-exp').hidden = true; st.r = null; gidisDonus(); return; }
+    st.r = r; goster(r); gidisDonus();
   }
   function goster(r) {
-    var h = [];
-    h.push('<div class="result-head"><span class="eyebrow">Yapı yaklaşık maliyeti · ' + M.YIL + '</span><span class="big">' + tl(r.toplam) + '</span><span class="meta">KDV hariç · ' +
-      U.num(r.alan, 2) + ' m² · ortalama ' + U.num(r.ortalama, 2) + ' TL/m²</span></div>');
-    h.push('<div class="scroll"><table class="t"><thead><tr><th>Yapı</th><th>Sınıf</th><th class="num">Birim maliyet</th><th class="num">Alan (m²)</th><th class="num">Tutar</th></tr></thead><tbody>');
-    r.satirlar.forEach(function (x) { h.push('<tr><td>' + U.esc(x.ad) + '</td><td class="m">' + x.kod + '</td><td class="num">' + U.num(x.bm, 2) + '</td><td class="num">' + U.num(x.alan, 2) + '</td><td class="num">' + U.num(x.tutar, 2) + '</td></tr>'); });
-    if (r.satirlar.length > 1) h.push('<tr class="hl"><td colspan="3"><strong>Toplam</strong></td><td class="num"><strong>' + U.num(r.alan, 2) + '</strong></td><td class="num"><strong>' + U.num(r.toplam, 2) + '</strong></td></tr>');
-    h.push('</tbody></table></div>');
-    h.push('<ul class="im-notes"><li>' + U.esc(M.VERI.not) + '</li><li>Birim maliyetler ortalama nitelikli yapı malzemesine göredir; gerçek inşaat maliyeti yerine geçmez.</li>' +
-      '<li>Kaynak: ' + U.esc(M.VERI.kaynak) + ' (' + U.esc(M.VERI.rg) + ').</li></ul>');
-    $('#ym-out').innerHTML = h.join(''); $('#ym-exp').hidden = false;
+    var h = [], sinif = $('#nv-sinif').value, sinir = r.sinirLup ? r.sinirLup[sinif] : null;
+    var durum = sinir == null ? (r.lup ? 'Lup' : 'Bağlı geçki') : r.ok ? 'Kapanma sınır içinde' : 'Kapanma sınırı aşıldı';
+    h.push('<div class="result-head"><span class="eyebrow">' + durum + '</span><span class="big">f = ' + (r.f >= 0 ? '+' : '') + U.num(r.f * 1000, 1) + ' mm</span><span class="meta">' + r.kurulum + ' kurulum' + (r.S != null ? ' · ' + U.num(r.S, 1) + ' m' : '') + ' · Σ(g − i) = ' + U.num(r.sumDh, 4) + ' m' + (sinir != null ? ' · md. 39 sınırı ' + U.num(sinir, 1) + ' mm' : '') + '</span></div>');
+    var t = ['<div class="scroll"><table class="t"><thead><tr><th>Nokta</th><th class="num">Geri</th><th class="num">Ara</th><th class="num">İleri</th><th class="num">Mesafe</th><th class="num">Düzeltme</th><th class="num">Kot H</th></tr></thead><tbody>'];
+    var vMap = {}; r.kurulumlar.forEach(function (c) { vMap[c.ileri] = c.v; c.ara.forEach(function (j) { vMap[j] = c.v; }); });
+    r.satirlar.forEach(function (s, j) {
+      t.push('<tr><td class="m">' + U.esc(s.ad) + '</td><td class="num">' + v3(s.g) + '</td><td class="num">' + v3(s.a) + '</td><td class="num">' + v3(s.i) + '</td><td class="num">' + (isFinite(s.s) ? U.num(s.s, 1) : '') + '</td><td class="num">' + (vMap[j] != null ? (vMap[j] >= 0 ? '+' : '') + U.num(vMap[j] * 1000, 1) + ' mm' : '') + '</td><td class="num"><strong>' + U.num(s.H, 3) + '</strong></td></tr>');
+    });
+    t.push('</tbody></table></div>'); h.push(t.join(''));
+    if (r.notlar.length) h.push('<ul class="im-notes">' + r.notlar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
+    $('#nv-out').innerHTML = h.join(''); $('#nv-exp').hidden = false;
   }
-  $('#ym-csv').addEventListener('click', function () {
-    var r = st.sonuc; if (!r) return;
-    var rows = [['yapi', 'sinif_grup', 'birim_maliyet_TL_m2', 'insaat_alani_m2', 'tutar_TL']];
-    r.satirlar.forEach(function (x) { rows.push([x.ad, x.kod, x.bm.toFixed(2), x.alan.toFixed(2), x.tutar.toFixed(2)]); });
-    rows.push(['TOPLAM (KDV hariç)', '', r.ortalama.toFixed(2), r.alan.toFixed(2), r.toplam.toFixed(2)], ['kaynak', M.VERI.rg, '', '', '']);
-    U.download('yapi_yaklasik_maliyeti_' + M.YIL + '.csv', U.csvRapor(rows));
-  });
-
-  ekle({ sec: oneriSecimi('III-B'), alan: '1.250' });
-  ciz(); yardimSync(); hesapla();
+  function gidisDonus() {
+    var g = num('#nv-g'), d = num('#nv-dn'), s = num('#nv-s'), box = $('#nv-gd');
+    if (g == null || d == null || s == null) { box.innerHTML = '<p class="hint">Gidiş ve dönüş yükseklik farklarını (işaretleriyle) ve yol uzunluğunu girin. Yardımcı nivelmanda ΔH için yukarıdaki defter kullanılır.</p>'; return; }
+    if (!isFinite(g) || !isFinite(d) || !(s > 0)) { box.innerHTML = '<p class="err">Değerler sayı olmalı.</p>'; return; }
+    var r = NV.gidisDonus({ gidis: g, donus: d, S: s, sinif: $('#nv-sinif').value, sumAbs: st.r ? st.r.sumAbs : 0 });
+    box.innerHTML = '<div class="scroll"><table class="t"><tbody><tr><td>Kapanma değeri w = Δh<sub>gidiş</sub> + Δh<sub>dönüş</sub></td><td class="num">' + U.num(r.w, 1) + ' mm</td></tr><tr><td>Sınır (md. 38, ' + U.esc($('#nv-sinif').selectedOptions[0].textContent.toLowerCase()) + ')</td><td class="num">' + U.num(r.sinir, 1) + ' mm ' + (r.ok ? '<span class="badge ok">sınır içinde</span>' : '<span class="badge no">sınır aşıldı</span>') + '</td></tr><tr><td>Ortalama yükseklik farkı</td><td class="num">' + U.num(r.ortalama, 4) + ' m</td></tr></tbody></table></div>';
+  }
+  function metin(sep) { return st.r.satirlar.map(function (s) { return [s.ad, s.H.toFixed(3)].join(sep); }).join('\r\n'); }
+  $('#nv-csv').addEventListener('click', function () { if (st.r) U.download('nivelman_kotlari.csv', '﻿nokta;H\r\n' + metin(';') + '\r\n'); });
+  $('#nv-copy').addEventListener('click', function () { if (st.r) U.copy(metin('\t')); });
+  $('#nv-sinif').addEventListener('change', hesapla);
+  root.addEventListener('input', function (e) { if (e.target.matches('input, textarea')) { clearTimeout(st.t); st.t = setTimeout(hesapla, 300); } });
+  hesapla();
 }};
 
-(function(){var s=document.getElementById('t-maliyet');U.subtabs(s);TOOLS['maliyet'].init(s);})();
+(function(){var s=document.getElementById('t-nivelman');U.subtabs(s);TOOLS['nivelman'].init(s);})();

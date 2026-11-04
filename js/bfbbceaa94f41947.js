@@ -131,7 +131,10 @@
       var kol = Array.prototype.slice.call(cols.children), mk = kol.filter(function (c) { return c.classList.contains('mapbox') || (c.classList.contains('stack') && c.querySelector(':scope > .mapbox')); })[0];
       if (!mk) return;
       var diger = Math.max.apply(null, kol.filter(function (c) { return c !== mk; }).map(function (c) { return c.scrollHeight; }).concat([0]));
-      mk.classList.toggle('harita-sabit', diger > mk.scrollHeight + 80);
+      // Karar haritanın sabitlenmemiş (doğal) yüksekliğine göre verilir; sabitlenince harita büyüdüğü için
+      // anlık yükseklikle karşılaştırmak 420↔620 px arasında sonsuz bir aç-kapa döngüsü yaratıyordu.
+      if (!mk.classList.contains('harita-sabit') || !mk._dogal) mk._dogal = mk.scrollHeight;
+      mk.classList.toggle('harita-sabit', diger > mk._dogal + 80);
     });
   }
   if (typeof MutationObserver !== 'undefined') {
@@ -528,61 +531,33 @@
 })();
 
 
-/* Fotoğraftan Konum arayüzü */
-(window.TOOLS = window.TOOLS || {}).exif = { init: function (root) {
+/* Alan Birim Çevirici arayüzü */
+(window.TOOLS = window.TOOLS || {}).alan = { init: function (root) {
   'use strict';
-  var EX = window.TA.EX, F = window.TA.F, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  U.zipper = function (name, data) { var o = {}; o[name] = typeof data === 'string' ? new TextEncoder().encode(data) : data; return F.zip(o); };
-  var api = window.HARITA.create($('#ex-map'), { center: [35.2, 39.1], zoom: 5, turkiye: true });
-  api.ipucu(['foto-pt'], function (p) { return p.dosya ? { ad: p.dosya, alt: p.cekim ? new Date(p.cekim).toLocaleString('tr-TR') : '', satirlar: p.yukseklik_m != null ? ['Yükseklik: ' + U.num(+p.yukseklik_m, 1) + ' m'] : [] } : null; }); // ortak bilgi kutusu
-  var rows = [], urls = [];
-  function fmtDate(d) { if (!(d instanceof Date) || isNaN(d)) return '—'; var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
-  function render(sel) {
-    var withGps = rows.filter(function (r) { return r.lat != null; });
-    $('#ex-big').textContent = rows.length ? withGps.length + ' / ' + rows.length + ' fotoğrafta konum var' : '—';
-    $('#ex-meta').textContent = rows.length && withGps.length < rows.length ? 'Konumsuz fotoğraflar listede gösterilir ama dışa aktarılmaz.' : '';
-    $('#ex-tab').tBodies[0].innerHTML = rows.map(function (r, i) {
-      return '<tr data-i="' + i + '"' + (i === sel ? ' class="hl"' : '') + ' style="cursor:pointer"><td><div style="display:flex;gap:8px;align-items:center;min-width:0">' + (r.url ? '<img src="' + r.url + '" alt="" style="width:44px;height:44px;object-fit:cover;flex:none;background:var(--rule)">' : '') + '<span style="overflow-wrap:anywhere">' + U.esc(r.name) + '</span></div></td>' +
-        '<td class="m">' + (r.lat != null ? U.num(r.lat, 6) + '<br>' + U.num(r.lon, 6) + (r.dir != null ? '<span class="sub">yön ' + U.num(r.dir, 0) + '°</span>' : '') : '<span class="sub">konum yok</span>') + '</td>' +
-        '<td>' + fmtDate(r.date) + (r.cam ? '<span class="sub">' + U.esc(r.cam) + '</span>' : '') + '</td></tr>';
+  var O = window.TA.O, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  O.AREA_UNITS.forEach(function (u) { $('#ab-unit').add(new Option(u.label, u.id)); });
+  $('#ab-unit').value = 'm2';
+  function dec(v) { var a = Math.abs(v); return a === 0 ? 0 : a >= 1000 ? 2 : a >= 1 ? 4 : a >= 0.001 ? 6 : 9; }
+  function run() {
+    var v = K.parseNumber($('#ab-val').value, { tr: true }), u = $('#ab-unit').value, err = $('#ab-err');
+    if (!isFinite(v) || v < 0) {
+      err.textContent = 'Sıfır ya da pozitif bir sayı girin (ör. 12.345,67).'; err.hidden = false;
+      // geçersiz girdide önceki sonuç ekranda kalmaz (yanlışlıkla kopyalanmasın)
+      $('#ab-out').tBodies[0].innerHTML = ''; $('#ab-tapu').textContent = '–'; $('#ab-meta').textContent = ''; return;
+    }
+    err.hidden = true;
+    var r = O.convertArea(v, u);
+    $('#ab-out').tBodies[0].innerHTML = O.AREA_UNITS.map(function (x) {
+      var val = r[x.id], d = dec(val);
+      return '<tr' + (x.id === u ? ' class="hl"' : '') + '><td>' + U.esc(x.label) + '</td><td class="num">' + U.num(val, d) + '</td><td>' + U.copyBtn(val.toFixed(d)) + '</td></tr>';
     }).join('');
-    var fc = toFC();
-    api.setData('foto', fc, { radius: 6 });
-    api.setData('fsec', { type: 'FeatureCollection', features: sel != null && rows[sel] && rows[sel].lat != null ? fc.features.filter(function (f) { return f.properties.dosya === rows[sel].name; }) : [] }, { radius: 10, color: U.cssVar('--text'), line: U.cssVar('--amber') });
-    $('#ex-dl').disabled = !withGps.length;
+    var b = O.donumBreakdown(Math.round(r.m2 * 100) / 100); // gösterim hassasiyetine yuvarlanıp bölünür (999,999 m² → 1 dönüm 0,00 m²)
+    $('#ab-tapu').textContent = U.num(b.donum, 0) + ' dönüm ' + U.num(b.m2, 2) + ' m²';
+    $('#ab-meta').textContent = U.num(r.m2, 2) + ' m² · ' + U.num(r.ha, 4) + ' ha';
   }
-  function toFC() {
-    return { type: 'FeatureCollection', features: rows.filter(function (r) { return r.lat != null; }).map(function (r) {
-      return { type: 'Feature', properties: { ad: r.name, dosya: r.name, cekim: r.date instanceof Date && !isNaN(r.date) ? r.date.toISOString() : '', yukseklik_m: r.alt != null ? +r.alt.toFixed(1) : null, yon_derece: r.dir != null ? +r.dir.toFixed(1) : null, kamera: r.cam || '' },
-        geometry: { type: 'Point', coordinates: [r.lon, r.lat] } };
-    }) };
-  }
-  function handle(list) {
-    var files = Array.prototype.slice.call(list).filter(function (f) { return /^image\//.test(f.type) || /\.(heic|heif|tiff?|jpe?g|png)$/i.test(f.name); });
-    if (!files.length) { $('#ex-err').textContent = 'Görüntü dosyası seçilmedi.'; $('#ex-err').hidden = false; return; }
-    $('#ex-err').hidden = true;
-    Promise.all(files.map(function (f) {
-      return EX.parse(f, { tiff: true, exif: true, gps: true, xmp: false, icc: false, iptc: false, translateValues: true, reviveValues: true }).then(function (m) { return { f: f, m: m || {} }; }, function () { return { f: f, m: {} }; });
-    })).then(function (res) {
-      res.forEach(function (x) {
-        var m = x.m, url = /\.(heic|heif|tiff?)$/i.test(x.f.name) ? null : URL.createObjectURL(x.f); if (url) urls.push(url);
-        var lat = isFinite(m.latitude) ? m.latitude : null, lon = isFinite(m.longitude) ? m.longitude : null;
-        if (lat === 0 && lon === 0) { lat = lon = null; }
-        rows.push({ name: x.f.name, url: url, lat: lat, lon: lat == null ? null : lon, alt: isFinite(m.GPSAltitude) ? m.GPSAltitude * (m.GPSAltitudeRef === 1 ? -1 : 1) : null,
-          dir: isFinite(m.GPSImgDirection) ? m.GPSImgDirection : null, date: m.DateTimeOriginal || m.CreateDate || null, cam: [m.Make, m.Model].filter(Boolean).join(' ') });
-      });
-      render(); var b = api.bboxOf(toFC()); if (b) api.fit(b, 16);
-    });
-  }
-  $('#ex-file').addEventListener('change', function (e) { handle(e.target.files); e.target.value = ''; });
-  var drop = $('#ex-drop');
-  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
-  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
-  drop.addEventListener('drop', function (e) { handle(e.dataTransfer.files); });
-  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#ex-file').click(); } });
-  $('#ex-tab').addEventListener('click', function (e) { var tr = e.target.closest('tr[data-i]'); if (!tr) return; var i = +tr.getAttribute('data-i'); render(i); if (rows[i].lat != null) api.fit([rows[i].lon, rows[i].lat, rows[i].lon, rows[i].lat]); });
-  $('#ex-dl').addEventListener('click', function () { try { var fmt = $('#ex-fmt').value, fc = toFC(), b = api.bboxOf(fc); var r = F.write(fc, 'geo-turef', { format: fmt, crs: fmt === 'shp' ? 'tm-turef-' + K.tmCmFor((b[0] + b[2]) / 2) : 'geo-turef', nameField: 'ad' }, 'fotograf_konumlari'); U.download(r.name, r.data); } catch (e) { $('#ex-err').textContent = e.message; $('#ex-err').hidden = false; } });
-  render();
+  $('#ab-val').addEventListener('input', run); $('#ab-unit').addEventListener('change', run);
+  $('#ab-form').addEventListener('submit', function (e) { e.preventDefault(); run(); });
+  run();
 }};
 
-(function(){var s=document.getElementById('t-exif');U.subtabs(s);TOOLS['exif'].init(s);})();
+(function(){var s=document.getElementById('t-alan');U.subtabs(s);TOOLS['alan'].init(s);})();

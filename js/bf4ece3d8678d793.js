@@ -131,7 +131,10 @@
       var kol = Array.prototype.slice.call(cols.children), mk = kol.filter(function (c) { return c.classList.contains('mapbox') || (c.classList.contains('stack') && c.querySelector(':scope > .mapbox')); })[0];
       if (!mk) return;
       var diger = Math.max.apply(null, kol.filter(function (c) { return c !== mk; }).map(function (c) { return c.scrollHeight; }).concat([0]));
-      mk.classList.toggle('harita-sabit', diger > mk.scrollHeight + 80);
+      // Karar haritanın sabitlenmemiş (doğal) yüksekliğine göre verilir; sabitlenince harita büyüdüğü için
+      // anlık yükseklikle karşılaştırmak 420↔620 px arasında sonsuz bir aç-kapa döngüsü yaratıyordu.
+      if (!mk.classList.contains('harita-sabit') || !mk._dogal) mk._dogal = mk.scrollHeight;
+      mk.classList.toggle('harita-sabit', diger > mk._dogal + 80);
     });
   }
   if (typeof MutationObserver !== 'undefined') {
@@ -153,99 +156,118 @@
 
 
 
-/* Sığınak Hesabı arayüzü */
-(window.TOOLS = window.TOOLS || {}).siginak = { init: function (root) {
+/* Yapı Yaklaşık Maliyeti arayüzü */
+(window.TOOLS = window.TOOLS || {}).maliyet = { init: function (root) {
   'use strict';
-  var S = window.TA.S, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var st = { sonuc: null, t: null };
-  var ESKI = '7.11.2025\'ten önce ruhsat başvurusu yapılmış, 6306 sayılı Kanun kapsamında noter onaylı inşaat sözleşmesi düzenlenmiş ya da kamu yapım işi için ihale kararı veya ihale tarihi alınmışsa, talep edilirse eski 7. madde hükümleri uygulanır (geçici md. 2). Bu araç güncel hükümlere göre hesaplar.';
-  function err(m) { var e = $('#sg-err'); e.textContent = m || ''; e.hidden = !m; }
-  function num(sel) { var t = String($(sel).value || '').trim(); if (!t) return null; var n = K.parseNumber(t, { tr: true }); if (!isFinite(n)) throw new Error('Sayıları rakamla girin (ör. 2.400 ya da 1.250,50).'); return n; }
+  var M = window.TA.M, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  var st = { rows: [], sonuc: null, t: null, odak: null }, seq = 0;
+  function err(m) { var e = $('#ym-err'); e.textContent = m || ''; e.hidden = !m; }
+  function num(v) { var t = String(v == null ? '' : v).trim(); if (!t) return null; var n = K.parseNumber(t, { tr: true }); return isFinite(n) ? n : NaN; }
+  function tl(v) { return U.num(v, 2) + ' TL'; }
 
-  $('#sg-tur').innerHTML = Object.keys(S.TURLER).map(function (k) { return '<option value="' + k + '">' + U.esc(S.TURLER[k]) + '</option>'; }).join('');
-  $('#sg-muaf').innerHTML = Object.keys(S.MUAF_TURLER).map(function (k) { return '<option value="' + k + '">' + U.esc(S.MUAF_TURLER[k]) + '</option>'; }).join('');
-
-  // Kullanıma göre görünen alanlar
-  function gor() {
-    var t = $('#sg-tur').value, has = function (a) { return a.indexOf(t) >= 0; };
-    $('#sg-konut').hidden = !has(['konut', 'karma']);
-    $('#sg-alanw').hidden = !has(['karma', 'konutDisi', 'egitim']);
-    $('#sg-alanw').firstChild.textContent = t === 'karma' ? 'Binanın tamamının emsale konu alanı (m²)' : 'Emsale konu alan (m²)';
-    $('#sg-kdnetw').hidden = t !== 'karma'; $('#sg-kyatakw').hidden = t !== 'karma';
-    $('#sg-haricw').hidden = t !== 'egitim';
-    $('#sg-resmiw').hidden = !has(['konutDisi', 'egitim']);
-    $('#sg-yatakw').hidden = !has(['konaklama', 'bakim']);
-    $('#sg-sanayi').hidden = t !== 'sanayi';
-    $('#sg-persw').hidden = $('#sg-kurul').value !== 'aranir';
-    $('#sg-stad').hidden = t !== 'stadyum';
-    $('#sg-muafw').hidden = t !== 'muaf';
-    // Sanayide toplam alan "Emsale konu alan" kutusundan okunur
-    if (t === 'sanayi') { $('#sg-alanw').hidden = false; $('#sg-alanw').firstChild.textContent = 'Tesisin emsale konu alanı (m²)'; }
+  // Seçim listesi: sınıf ve grup başlığı altında tebliğdeki yapılar (değer "III-B|11")
+  var optHtml = '<option value="">Seçin…</option>' + M.GRUPLAR.map(function (g) {
+    return '<optgroup label="' + g.sinif + '. sınıf (' + g.grup + ') grubu · ' + U.num(g.bm, 0) + ' TL/m²">' +
+      g.yapilar.map(function (y, i) { return '<option value="' + g.kod + '|' + i + '">' + U.esc(y) + '</option>'; }).join('') + '</optgroup>';
+  }).join('');
+  function satirHtml(r) {
+    return '<div class="op-row card" data-k="' + r.k + '">' +
+      '<label class="f">Yapı türü (sınıf ve grup)<select data-f="sec">' + optHtml.replace('value="' + r.sec + '"', 'value="' + r.sec + '" selected') + '</select></label>' +
+      '<div class="row r2" style="align-items:end"><label class="f">İnşaat alanı (m²)<input data-f="alan" inputmode="decimal" value="' + U.esc(r.alan || '') + '" placeholder="ör. 1.250"></label>' +
+      '<div class="f" style="justify-content:flex-end;align-items:flex-end">' + (st.rows.length > 1 ? '<button class="btn ghost sm" type="button" data-sil="' + r.k + '" aria-label="Yapıyı kaldır">Kaldır</button>' : '') + '</div></div></div>';
   }
+  function ciz() { $('#ym-rows').innerHTML = st.rows.map(satirHtml).join(''); }
+  function ekle(r) { r.k = ++seq; st.rows.push(r); return r; }
+  function bul(k) { return st.rows.filter(function (r) { return r.k === +k; })[0]; }
+  function hedef() { return bul(st.odak) || st.rows[0]; }
 
-  function girdi() {
-    var t = $('#sg-tur').value, a = num('#sg-alan');
-    return {
-      tur: t, konut: { o1: num('#sg-o1'), o2: num('#sg-o2'), o3: num('#sg-o3') },
-      konutDisiAlan: a, konutDisiNet: num('#sg-kdnet'), karmaYatak: num('#sg-kyatak'), egitimHaric: num('#sg-haric'), resmi: $('#sg-resmi').checked && (t === 'konutDisi' || t === 'egitim'),
-      yatak: num('#sg-yatak'), seyirci: num('#sg-seyirci'), yeniTesis: $('#sg-yeni').checked,
-      sanayiAlan: t === 'sanayi' ? a : null, idariAlan: num('#sg-idari'), kurulKarari: $('#sg-kurul').value, personel: num('#sg-pers'),
-      salonAlan: num('#sg-salon'), muafTur: $('#sg-muaf').value, yangin: $('#sg-yangin').value, tamamiMd8: $('#sg-md8').checked
-    };
+  $('#ym-rows').addEventListener('focusin', function (e) { var row = e.target.closest('[data-k]'); if (row) st.odak = +row.getAttribute('data-k'); });
+  $('#ym-rows').addEventListener('input', function (e) {
+    var t = e.target, f = t.getAttribute('data-f'), row = t.closest('[data-k]'); if (!f || !row) return;
+    bul(row.getAttribute('data-k'))[f] = t.value;
+    if (f === 'sec') hesapla(); else { clearTimeout(st.t); st.t = setTimeout(hesapla, 250); }
+  });
+  $('#ym-rows').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-sil]'); if (!b) return;
+    st.rows = st.rows.filter(function (r) { return r.k !== +b.getAttribute('data-sil'); }); ciz(); hesapla();
+  });
+  $('#ym-add').addEventListener('click', function () { var r = ekle({ sec: '', alan: '' }); st.odak = r.k; ciz(); var s = U.$$('#ym-rows select', root).pop(); if (s) s.focus(); });
+
+  // Arama: sonuca tıklayınca seçili (son odaklanılan) satıra yazılır
+  function aramaCiz() {
+    var q = $('#ym-ara').value, box = $('#ym-sonuc'), a = M.ara(q).slice(0, 12);
+    if (!q.trim()) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.innerHTML = a.length ? a.map(function (x) { return '<button type="button" class="ym-bul" data-sec="' + x.kod + '|' + x.i + '"><span>' + U.esc(x.ad) + '</span><span class="meta">' + x.kod + ' · ' + U.num(x.bm, 0) + ' TL/m²</span></button>'; }).join('') :
+      '<p class="hint">Eşleşen yapı yok. Tebliğde olmayan yapılar benzer gruptaki yapılara kıyasla belirlenir.</p>';
   }
+  $('#ym-ara').addEventListener('input', aramaCiz);
+  $('#ym-sonuc').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-sec]'); if (!b) return;
+    var r = hedef(); r.sec = b.getAttribute('data-sec'); ciz(); hesapla();
+    $('#ym-ara').value = ''; aramaCiz();
+    var inp = U.$('[data-k="' + r.k + '"] [data-f="alan"]', root); if (inp && !inp.value) inp.focus();
+  });
+
+  // Grup yardımcısı
+  function yardimSync() { var m = $('#ym-tur').value === 'mustakil'; $('#ym-katw').hidden = m; $('#ym-bbw').hidden = !m; oneriCiz(); }
+  function oneri() {
+    var tur = $('#ym-tur').value;
+    if (tur === 'mustakil') return M.oner(tur, { bbAlan: num($('#ym-bb').value) });
+    return M.oner(tur, { kat: num($('#ym-kat').value), yukseklik: num($('#ym-h').value) });
+  }
+  function oneriSecimi(kod) {
+    var tur = $('#ym-tur').value, g = M.BY_KOD[kod], re = tur === 'mustakil' ? /^Müstakil/ : tur === 'konut' ? /^Konutlar/ : /^İş merkezleri/;
+    for (var i = 0; i < g.yapilar.length; i++) if (re.test(g.yapilar[i])) return kod + '|' + i;
+    return null;
+  }
+  function oneriCiz() {
+    var o = $('#ym-oneri');
+    try { var kod = oneri(), g = M.BY_KOD[kod]; o.textContent = kod + ' grubu · ' + U.num(g.bm, 0) + ' TL/m²'; $('#ym-uygula').disabled = false; }
+    catch (e) { o.textContent = e.message; $('#ym-uygula').disabled = true; }
+  }
+  ['#ym-tur'].forEach(function (s) { $(s).addEventListener('change', yardimSync); });
+  ['#ym-kat', '#ym-h', '#ym-bb'].forEach(function (s) { $(s).addEventListener('input', oneriCiz); });
+  $('#ym-uygula').addEventListener('click', function () {
+    try { var sec = oneriSecimi(oneri()); if (!sec) return; var r = st.rows[0]; r.sec = sec; ciz(); hesapla(); } catch (e) { err(e.message); }
+  });
+
   function hesapla() {
-    err(''); gor();
-    var r; try { r = S.hesapla(girdi()); } catch (e) { err(e.message); $('#sg-out').innerHTML = ''; $('#sg-exp').hidden = true; st.sonuc = null; return; }
+    err('');
+    var satirlar = [], hata = null;
+    st.rows.forEach(function (r, i) {
+      if (hata || !r.sec) return;
+      var a = num(r.alan); if (a == null) return;
+      if (!(a > 0)) { hata = (i + 1) + '. yapı: inşaat alanını pozitif bir sayı olarak girin (ör. 1.250,50).'; return; }
+      var p = r.sec.split('|'); satirlar.push({ kod: p[0], alan: a, ad: M.BY_KOD[p[0]].yapilar[+p[1]] });
+    });
+    if (hata) { err(hata); $('#ym-out').innerHTML = ''; $('#ym-exp').hidden = true; st.sonuc = null; return; }
+    if (!satirlar.length) { $('#ym-out').innerHTML = '<p class="hint">Yapı türünü seçip inşaat alanını girin.</p>'; $('#ym-exp').hidden = true; st.sonuc = null; return; }
+    var r; try { r = M.hesapla(satirlar); } catch (e) { err(e.message); return; }
     st.sonuc = r; goster(r);
   }
   function goster(r) {
-    var h = [], eski = $('#sg-eski').checked;
-    if (!r.zorunlu) {
-      h.push('<div class="result-head"><span class="eyebrow">Sığınak · md. ' + U.esc(r.madde) + '</span><span class="big">Zorunlu değil</span><span class="meta">' + U.esc(r.gerekce) + '</span></div>');
-      if (eski) h.push('<ul class="warnlist"><li>' + ESKI + '</li></ul>');
-      $('#sg-out').innerHTML = h.join(''); $('#sg-exp').hidden = false; return;
-    }
-    if (r.karar === 'bekliyor') h.push('<div class="result-head"><span class="eyebrow">Sığınak · il idare kurulu kararına bağlı</span><span class="big">Kurul kararı gerekli</span><span class="meta">Üretim yapıları için sonuç verilemez' + (r.kisi ? ' · idari bölümler için en az ' + U.num(r.netAlan, 0) + ' m² (' + r.kisi + ' kişi)' : '') + '</span></div>');
-    else h.push('<div class="result-head"><span class="eyebrow">Gereken net sığınak alanı</span><span class="big">' + U.num(r.netAlan, 0) + ' m²</span><span class="meta">' + r.kisi + ' kişi · ' + U.esc(r.gerekce) + '</span></div>');
-    if (r.karar === 'bekliyor' && !r.kisi) { h.push('<ul class="im-notes">' + r.notlar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>'); $('#sg-out').innerHTML = h.join(''); $('#sg-exp').hidden = false; return; }
-    if (r.kalemler.length) h.push('<div class="scroll"><table class="t"><thead><tr><th>Kullanım</th><th>Hesap</th><th class="num">Kişi</th><th class="num">Alan (m²)</th></tr></thead><tbody>' +
-      r.kalemler.map(function (x) { return '<tr><td>' + U.esc(x.ad) + '</td><td class="m">' + U.esc(x.hesap) + '</td><td class="num">' + x.kisi + '</td><td class="num">' + U.num(x.alan, 0) + '</td></tr>'; }).join('') +
-      '<tr class="hl"><td colspan="2"><strong>Toplam (kişi başı en az net 1 m²)</strong></td><td class="num"><strong>' + r.kisi + '</strong></td><td class="num"><strong>' + U.num(r.gerekenAlan, 0) + '</strong></td></tr>' +
-      (r.salonDusumu > 0 ? '<tr><td colspan="3">Sığınak vasfındaki salon alanı düşümü</td><td class="num">−' + U.num(r.salonDusumu, 2) + '</td></tr>' : '') +
-      '</tbody></table></div>');
-    var w = r.tuvalet, ek = [];
-    ek.push(['Tuvalet ve lavabo', w.cift ? w.cift + ' kadın + ' + w.cift + ' erkek' : '1 kadın + 1 erkek (öneri)', '8/a']);
-    ek.push(['Mutfak nişi (lavabo ve elektrikli pişirme yeri)', r.mutfak ? 'gerekli, en az 2,30 m²' : 'gerekmez (100 m² ve altı)', '8/a']);
-    ek.push(['Çıkış', r.cikis === 2 ? '2 çıkış (100 m²\'den büyük)' : '1 çıkış', '8/c']);
-    ek.push(['İç yükseklik', 'net en az 2,40 m', '8/a']);
-    ek.push(['Dış duvar ve tavan', 'en az 60 cm beton, 75 cm tuğla/taş ya da 90 cm sıkıştırılmış toprak; tamamen toprak altında, dışarıyla arasında en az 60 cm toprak dolgu olan duvarlarda statik hesaba göre', '8/b']);
-    ek.push(['Havalandırma', r.kisi + ' kişi × ' + U.num(r.debi, 1) + ' = ' + U.num(r.hava, 1) + ' m³/saat', '8/ç']);
-    ek.push(['Filtre (koruma zamanı)', r.filtre, '8/ç']);
-    ek.push(['Enerji', r.enerji24 ? 'en az 24 saat kesintisiz elektrik' : 'fan için jeneratör ya da kesintisiz güç kaynağı', '8/ç']);
-    h.push('<div class="scroll"><table class="t"><tbody>' + ek.map(function (e) { return '<tr><td>' + e[0] + '</td><td>' + U.esc(e[1]) + '</td><td class="m">md. ' + e[2] + '</td></tr>'; }).join('') + '</tbody></table></div>');
-    var notlar = r.notlar.slice();
-    notlar.push('Sığınaklar emsal hesabına dâhil değildir; yer üstünde ya da kısmen yeraltında yapılanlar TAKS\'a dâhildir, ana yapıdan ayrı ve tamamen toprak altındakiler dâhil değildir (md. 6).');
-    if (eski) notlar.unshift(ESKI);
-    h.push('<ul class="im-notes">' + notlar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
-    if (r.uyarilar.length) h.push('<ul class="warnlist">' + r.uyarilar.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ul>');
-    $('#sg-out').innerHTML = h.join(''); $('#sg-exp').hidden = false;
+    var h = [];
+    h.push('<div class="result-head"><span class="eyebrow">Yapı yaklaşık maliyeti · ' + M.YIL + '</span><span class="big">' + tl(r.toplam) + '</span><span class="meta">KDV hariç · ' +
+      U.num(r.alan, 2) + ' m² · ortalama ' + U.num(r.ortalama, 2) + ' TL/m²</span></div>');
+    h.push('<div class="scroll"><table class="t"><thead><tr><th>Yapı</th><th>Sınıf</th><th class="num">Birim maliyet</th><th class="num">Alan (m²)</th><th class="num">Tutar</th></tr></thead><tbody>');
+    r.satirlar.forEach(function (x) { h.push('<tr><td>' + U.esc(x.ad) + '</td><td class="m">' + x.kod + '</td><td class="num">' + U.num(x.bm, 2) + '</td><td class="num">' + U.num(x.alan, 2) + '</td><td class="num">' + U.num(x.tutar, 2) + '</td></tr>'); });
+    if (r.satirlar.length > 1) h.push('<tr class="hl"><td colspan="3"><strong>Toplam</strong></td><td class="num"><strong>' + U.num(r.alan, 2) + '</strong></td><td class="num"><strong>' + U.num(r.toplam, 2) + '</strong></td></tr>');
+    h.push('</tbody></table></div>');
+    h.push('<ul class="im-notes"><li>' + U.esc(M.VERI.not) + '</li><li>Birim maliyetler ortalama nitelikli yapı malzemesine göredir; gerçek inşaat maliyeti yerine geçmez.</li>' +
+      '<li>Kaynak: ' + U.esc(M.VERI.kaynak) + ' (' + U.esc(M.VERI.rg) + ').</li></ul>');
+    $('#ym-out').innerHTML = h.join(''); $('#ym-exp').hidden = false;
   }
-  $('#sg-csv').addEventListener('click', function () {
+  $('#ym-csv').addEventListener('click', function () {
     var r = st.sonuc; if (!r) return;
-    var rows = [['kalem', 'hesap', 'deger']];
-    rows.push(['kullanim', S.TURLER[r.tur], ''], ['zorunluluk', r.karar === 'bekliyor' ? 'il idare kurulu kararına bağlı' : r.zorunlu ? 'zorunlu' : 'zorunlu değil', 'md. ' + r.madde], ['gerekce', r.gerekce, '']);
-    if (r.zorunlu) {
-      r.kalemler.forEach(function (x) { rows.push([x.ad, x.hesap, x.kisi + ' kişi; ' + x.alan + ' m²']); });
-      rows.push(['toplam_kisi', '', r.kisi], ['net_siginak_alani_m2', r.karar === 'bekliyor' ? 'yalnız idari bölümler; üretim kurul kararına bağlı' : 'kişi başı en az 1 m²', r.netAlan], ['tuvalet_lavabo_cift', 'kadın + erkek', r.tuvalet.cift || '1 (öneri)'],
-        ['mutfak_nisi', '', r.mutfak ? 'gerekli (en az 2,30 m²)' : 'gerekmez'], ['cikis', '', r.cikis], ['havalandirma_m3_saat', r.kisi + ' × ' + r.debi, r.hava.toFixed(1)], ['filtre', r.filtre, '']);
-    }
-    rows.push(['kaynak', 'Sığınak Yönetmeliği (RG 7.11.2025, 33070 değişikliği işlenmiş)', '']);
-    U.download('siginak_hesabi.csv', U.csvRapor(rows));
+    var rows = [['yapi', 'sinif_grup', 'birim_maliyet_TL_m2', 'insaat_alani_m2', 'tutar_TL']];
+    r.satirlar.forEach(function (x) { rows.push([x.ad, x.kod, x.bm.toFixed(2), x.alan.toFixed(2), x.tutar.toFixed(2)]); });
+    rows.push(['TOPLAM (KDV hariç)', '', r.ortalama.toFixed(2), r.alan.toFixed(2), r.toplam.toFixed(2)], ['kaynak', M.VERI.rg, '', '', '']);
+    U.download('yapi_yaklasik_maliyeti_' + M.YIL + '.csv', U.csvRapor(rows));
   });
 
-  ['#sg-tur', '#sg-kurul', '#sg-yangin', '#sg-resmi', '#sg-yeni', '#sg-md8', '#sg-eski', '#sg-muaf'].forEach(function (s) { $(s).addEventListener('change', hesapla); });
-  U.$$('input[inputmode]', root).forEach(function (i) { i.addEventListener('input', function () { clearTimeout(st.t); st.t = setTimeout(hesapla, 250); }); });
-  hesapla();
+  ekle({ sec: oneriSecimi('III-B'), alan: '1.250' });
+  ciz(); yardimSync(); hesapla();
 }};
 
-(function(){var s=document.getElementById('t-siginak');U.subtabs(s);TOOLS['siginak'].init(s);})();
+(function(){var s=document.getElementById('t-maliyet');U.subtabs(s);TOOLS['maliyet'].init(s);})();
