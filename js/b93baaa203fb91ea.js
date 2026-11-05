@@ -372,6 +372,8 @@
     // İle tıklayıp yakınlaşma (opts.ilSec; Mekânsal Analiz, Haritada Ölç): Türkiye görünümünde iller seçilebilir, üzerine gelince
     // il adı görünür ve ilin kenarı koyulaşır; tıklayınca harita kayarak o ile yakınlaşır (nüfus haritasındaki gibi). z 7'den sonra kapanır.
     var IL_SEC_Z = 7;
+    // Araçların kendi harita tıklamaları (nokta yüksekliği, bakış noktası) il seçimi etkinken (Türkiye görünümü) çalışmaz
+    api.ilSecte = function () { return !!(opts.ilSec && !api._cizim && map.getZoom() < IL_SEC_Z && map.getLayer('_ilsec-fill')); };
     function ilSecKur(t, yay) {
       var o = t.objects[Object.keys(t.objects)[0]];
       function halka(ix) { var c = []; ix.forEach(function (i, k) { var a = i < 0 ? yay[~i].slice().reverse() : yay[i]; c = c.concat(k ? a.slice(1) : a); }); return c; }
@@ -396,7 +398,9 @@
         var f = bul(e); if (!f) return;
         var ad = f.properties.ad, tam = fc.features.filter(function (x) { return x.properties.ad === ad; })[0], b = api.bboxOf({ features: [tam] });
         ip.hidden = true; vurgula(null);
-        map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 30, duration: 800, maxZoom: 11 });
+        // büyük il ya da dar ekranda yakınlaşma il seçim eşiğinin altında kalmasın (yoksa araç tıklamaları açılmaz)
+        var cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 30, maxZoom: 11 }) || {};
+        map.easeTo({ center: cam.center || [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], zoom: Math.max(cam.zoom || 0, IL_SEC_Z + 0.2), duration: 800 });
       });
     }
     // Yer adı etiketleri (DOM): [{ ad, c: [boylam, enlem], tip: 'il'|'ilce', min, max }]; yalnız görünen alandaki ve yakınlaştırma aralığındakiler çizilir
@@ -562,118 +566,94 @@
 })();
 
 
-/* Parsel Alanı ve İfraz arayüzü */
-(window.TOOLS = window.TOOLS || {}).parsel = { init: function (root) {
+/* Semt Açısı ve Kestirme arayüzü */
+(window.TOOLS = window.TOOLS || {}).azimut = { init: function (root) {
   'use strict';
   var O = window.TA.O, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var SAMPLE = '1  487200,00  4420800,00\n2  487262,40  4420812,15\n3  487281,90  4420756,30\n4  487240,75  4420731,60\n5  487198,30  4420748,90';
-  var pts = null, info = null, split = null;
+  U.subtabs(root);
+  function unit() { return $('#az-unit').value; }
+  function uSym() { return unit() === 'grad' ? 'ᵍ' : '°'; }
+  function fmtAng(rad) {
+    if (unit() === 'grad') return U.num(rad * 200 / Math.PI, 4) + 'ᵍ';
+    return K.fmtDMS(rad * 180 / Math.PI, null, 1);
+  }
+  function num(id, what) { var v = K.parseNumber($(id).value); if (!isFinite(v)) throw new Error(what + ' sayı olmalı'); return v; }
+  function ang(id, what) {
+    var t = $(id).value, v = unit() === 'grad' ? K.parseNumber(String(t).replace(/\s*(grad|gon|g|ᵍ)\s*$/i, '')) : K.parseAngle(t, 'none');
+    if (!isFinite(v)) throw new Error(what + ' okunamadı' + (unit() === 'deg' ? ' (ondalık ya da 87°45′30″ biçiminde yazın)' : ''));
+    return v;
+  }
+  function guard(errId, fn) { var e = $(errId); try { fn(); e.hidden = true; } catch (x) { e.textContent = x.message; e.hidden = false; } }
 
-  function draw() {
-    var svg = $('#pa-svg'); if (!pts) { svg.innerHTML = ''; return; }
-    var W = 600, H = 460, pad = 46;
-    var ys = pts.map(function (p) { return p.y; }), xs = pts.map(function (p) { return p.x; });
+  function t2() { guard('#t2-err', function () {
+    var A = { y: num('#t2-ay', 'A–Y'), x: num('#t2-ax', 'A–X') }, B = { y: num('#t2-by', 'B–Y'), x: num('#t2-bx', 'B–X') };
+    var r = O.secondTask(A, B);
+    $('#t2-big').textContent = fmtAng(r.rad);
+    $('#t2-meta').textContent = 's_AB = ' + U.num(r.s, 3) + ' m';
+    $('#t2-kv').innerHTML = '<dt>ΔY</dt><dd>' + U.num(r.dy, 3) + ' m</dd><dt>ΔX</dt><dd>' + U.num(r.dx, 3) + ' m</dd>' +
+      '<dt>t_AB</dt><dd>' + U.num(r.grad, 5) + 'ᵍ · ' + K.fmtDMS(r.deg, null, 2) + ' ' + U.copyBtn(unit() === 'grad' ? r.grad.toFixed(5) : r.deg.toFixed(7)) + '</dd>' +
+      '<dt>t_BA</dt><dd>' + U.num((r.grad + 200) % 400, 5) + 'ᵍ · ' + K.fmtDMS((r.deg + 180) % 360, null, 2) + '</dd>' +
+      '<dt>s_AB</dt><dd>' + U.num(r.s, 3) + ' m ' + U.copyBtn(r.s.toFixed(3)) + '</dd>';
+  }); }
+
+  function t1() { guard('#t1-err', function () {
+    var A = { y: num('#t1-ay', 'A–Y'), x: num('#t1-ax', 'A–X') }, t = ang('#t1-t', 'Semt açısı'), s = num('#t1-s', 'Kenar');
+    if (s <= 0) throw new Error('Kenar uzunluğu pozitif olmalı');
+    var B = O.firstTask(A, t, unit(), s);
+    $('#t1-big').textContent = 'Y ' + U.num(B.y, 3) + '   X ' + U.num(B.x, 3);
+    $('#t1-meta').textContent = 'B noktası, A\'dan ' + U.num(s, 3) + ' m';
+    $('#t1-kv').innerHTML = '<dt>ΔY = s·sin t</dt><dd>' + U.num(B.dy, 3) + ' m</dd><dt>ΔX = s·cos t</dt><dd>' + U.num(B.dx, 3) + ' m</dd>' +
+      '<dt>Y_B</dt><dd>' + U.num(B.y, 3) + ' ' + U.copyBtn(B.y.toFixed(3)) + '</dd><dt>X_B</dt><dd>' + U.num(B.x, 3) + ' ' + U.copyBtn(B.x.toFixed(3)) + '</dd>';
+  }); }
+
+  function ki() { guard('#ki-err', function () {
+    var A = { y: num('#ki-ay', 'A–Y'), x: num('#ki-ax', 'A–X') }, B = { y: num('#ki-by', 'B–Y'), x: num('#ki-bx', 'B–X') };
+    var a = ang('#ki-a', 'α'), b = ang('#ki-b', 'β'), side = $('#ki-side').value;
+    var r = O.forwardIntersection(A, B, a, b, unit(), side);
+    $('#ki-big').textContent = 'Y ' + U.num(r.P.y, 3) + '   X ' + U.num(r.P.x, 3);
+    $('#ki-meta').textContent = 'γ = ' + fmtAng(r.gamma) + (r.weak ? ' · zayıf kestirme (γ 30°–150° dışında)' : '');
+    $('#ki-kv').innerHTML = '<dt>s_AP</dt><dd>' + U.num(r.sAP, 3) + ' m</dd><dt>s_BP</dt><dd>' + U.num(r.sBP, 3) + ' m</dd>' +
+      '<dt>t_AP</dt><dd>' + fmtAng(r.tAP) + '</dd><dt>t_BP</dt><dd>' + fmtAng(r.tBP) + '</dd>' +
+      '<dt>Denetim</dt><dd>A ve B\'den bulunan P farkı ' + U.num(r.check * 1000, 3) + ' mm</dd>' +
+      '<dt>P</dt><dd>' + U.copyBtn(r.P.y.toFixed(3) + ' ' + r.P.x.toFixed(3)) + '</dd>';
+    sketch(A, B, r.P);
+  }); }
+
+  function sketch(A, B, P) {
+    var W = 520, H = 300, pad = 40, list = [A, B, P];
+    var ys = list.map(function (p) { return p.y; }), xs = list.map(function (p) { return p.x; });
     var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys), minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
     var sc = Math.min((W - 2 * pad) / Math.max(maxY - minY, 1e-9), (H - 2 * pad) / Math.max(maxX - minX, 1e-9));
     var ox = (W - (maxY - minY) * sc) / 2, oy = (H - (maxX - minX) * sc) / 2;
-    function P(p) { return [(ox + (p.y - minY) * sc).toFixed(1), (H - oy - (p.x - minX) * sc).toFixed(1)]; }
-    function poly(list) { return list.map(function (p) { return P(p).join(','); }).join(' '); }
-    var amber = 'var(--amber)', text = 'var(--text)', h = '';
-    if (split) {
-      h += '<polygon points="' + poly(split.part1) + '" fill="var(--amber)" fill-opacity=".30" stroke="none"/>';
-      h += '<polygon points="' + poly(split.part2) + '" fill="var(--rule)" fill-opacity=".45" stroke="none"/>';
-    }
-    h += '<polygon points="' + poly(pts) + '" fill="' + (split ? 'none' : 'var(--tint)') + '" stroke="' + text + '" stroke-width="1.6"/>';
-    // taban kenarı vurgusu
-    var e = +$('#pa-edge').value; if (isFinite(e) && pts[e]) { var a = P(pts[e]), b = P(pts[(e + 1) % pts.length]); h += '<line x1="' + a[0] + '" y1="' + a[1] + '" x2="' + b[0] + '" y2="' + b[1] + '" stroke="' + amber + '" stroke-width="4"/>'; }
-    if (split && split.line.length >= 2) {
-      var l1 = P(split.line[0]), l2 = P(split.line[1]);
-      h += '<line x1="' + l1[0] + '" y1="' + l1[1] + '" x2="' + l2[0] + '" y2="' + l2[1] + '" stroke="' + text + '" stroke-width="1.6" stroke-dasharray="6 4"/>';
-      var yn = 0; split.line.forEach(function (p) { if (!p.yeni) return; var q = P(p); yn++; h += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="4" fill="' + amber + '" stroke="' + text + '"/><text class="svg-strong" x="' + (+q[0] + 7) + '" y="' + (+q[1] - 7) + '">Y' + yn + '</text>'; });
-    }
-    // köşeler ve kenar uzunlukları
-    var cy = pts.reduce(function (s, p) { return s + p.y; }, 0) / pts.length, cx = pts.reduce(function (s, p) { return s + p.x; }, 0) / pts.length;
-    pts.forEach(function (p, i) {
-      var q = P(p), dy = p.y - cy, dx = p.x - cx, L = Math.hypot(dy, dx) || 1;
-      var tx = +q[0] + dy / L * 14, ty = +q[1] - dx / L * 14;
-      h += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="3.5" fill="' + text + '"/>';
-      h += '<text class="svg-strong" text-anchor="middle" dominant-baseline="middle" x="' + tx.toFixed(1) + '" y="' + ty.toFixed(1) + '">' + U.esc(p.ad) + '</text>';
-      var n = pts[(i + 1) % pts.length], m = P({ y: (p.y + n.y) / 2, x: (p.x + n.x) / 2 });
-      h += '<text class="svg-text" text-anchor="middle" x="' + m[0] + '" y="' + (+m[1] - 4) + '">' + U.num(O.dist(p, n), 2) + '</text>';
+    function Q(p) { return [ox + (p.y - minY) * sc, H - oy - (p.x - minX) * sc]; }
+    var a = Q(A), b = Q(B), p = Q(P), h = '';
+    h += '<line x1="' + a[0] + '" y1="' + a[1] + '" x2="' + b[0] + '" y2="' + b[1] + '" stroke="var(--text)" stroke-width="2"/>';
+    h += '<line x1="' + a[0] + '" y1="' + a[1] + '" x2="' + p[0] + '" y2="' + p[1] + '" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="6 4"/>';
+    h += '<line x1="' + b[0] + '" y1="' + b[1] + '" x2="' + p[0] + '" y2="' + p[1] + '" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="6 4"/>';
+    [[a, 'A'], [b, 'B'], [p, 'P']].forEach(function (k) {
+      h += '<circle cx="' + k[0][0] + '" cy="' + k[0][1] + '" r="' + (k[1] === 'P' ? 5 : 4) + '" fill="' + (k[1] === 'P' ? 'var(--amber)' : 'var(--text)') + '" stroke="var(--text)"/>';
+      h += '<text class="svg-strong" x="' + (k[0][0] + 8) + '" y="' + (k[0][1] - 8) + '">' + k[1] + '</text>';
     });
-    // kuzey oku
-    h += '<g transform="translate(' + (W - 28) + ',30)"><line x1="0" y1="14" x2="0" y2="-12" stroke="' + text + '" stroke-width="1.4"/><path d="M0,-16 L-5,-6 L5,-6 Z" fill="' + text + '"/><text class="svg-strong" text-anchor="middle" y="28">K</text></g>';
-    svg.innerHTML = h;
+    h += '<g transform="translate(' + (W - 24) + ',28)"><line x1="0" y1="14" x2="0" y2="-12" stroke="var(--text)" stroke-width="1.4"/><path d="M0,-16 L-5,-6 L5,-6 Z" fill="var(--text)"/><text class="svg-strong" text-anchor="middle" y="28">K</text></g>';
+    $('#ki-svg').innerHTML = h;
   }
 
-  function compute() {
-    var err = $('#pa-err'); split = null; $('#pa-sres').hidden = true; $('#pa-serr').hidden = true;
-    try {
-      pts = O.parsePointList($('#pa-in').value, K.parseNumber);
-      info = O.polygonInfo(pts);
-      err.hidden = true;
-    } catch (e) { err.textContent = e.message; err.hidden = false; pts = null; info = null; temizle(); draw(); return; }
-    // Kendini kesen sınırda alan anlamsızdır: sonuç ve ifraz üretilmez (çizim, hatayı görmek için kalır)
-    if (info.selfIntersects) { err.textContent = 'Parsel kenarları birbirini kesiyor; alan ve ifraz hesaplanmadı. Köşeleri sınır boyunca sırayla (saat yönünde ya da tersine) girin.'; err.hidden = false; info = null; temizle(); draw(); return; }
-    var b = O.donumBreakdown(Math.round(info.area * 100) / 100);
-    $('#pa-area').textContent = U.num(info.area, 2) + ' m²';
-    $('#pa-meta').textContent = U.num(b.donum, 0) + ' dönüm ' + U.num(b.m2, 2) + ' m² · çevre ' + U.num(info.perimeter, 2) + ' m · ' + pts.length + ' köşe, ' + (info.clockwise ? 'saat yönünde' : 'saat yönünün tersine') + ' sıralı';
-    $('#pa-edges').tBodies[0].innerHTML = info.edges.map(function (e) {
-      return '<tr><td class="m">' + U.esc(pts[e.from].ad) + ' → ' + U.esc(pts[e.to].ad) + '</td><td class="num">' + U.num(e.length, 3) + '</td><td class="num">' + U.num(e.semt.grad, 4) + '</td><td class="num">' + K.fmtDMS(e.semt.deg, null, 1) + '</td></tr>';
-    }).join('');
-    var sel = $('#pa-edge'), prev = sel.value; sel.innerHTML = '';
-    info.edges.forEach(function (e, i) { sel.add(new Option(pts[e.from].ad + ' – ' + pts[e.to].ad + ' (' + U.num(e.length, 2) + ' m)', i)); });
-    if (prev && +prev < info.edges.length) sel.value = prev;
-    var pv = $('#pa-pivot'), pprev = pv.value; pv.innerHTML = '';
-    pts.forEach(function (p, i) { pv.add(new Option(p.ad, i)); });
-    if (pprev && +pprev < pts.length) pv.value = pprev;
-    yonDoldur();
-    draw();
-  }
-
-  // Geçersiz girdide önceki parselin sonuçları ekranda kalmaz
-  function temizle() {
-    $('#pa-area').textContent = '—'; $('#pa-meta').textContent = ''; $('#pa-edges').tBodies[0].innerHTML = '';
-    $('#pa-edge').innerHTML = ''; $('#pa-pivot').innerHTML = ''; $('#pa-yon').innerHTML = '';
-  }
-  function yonDoldur() {
-    if (!pts || !info) return; var k = +$('#pa-pivot').value || 0, n = pts.length, y = $('#pa-yon'), onc = y.value;
-    y.innerHTML = '';
-    y.add(new Option(pts[k].ad + ' → ' + pts[(k + 1) % n].ad + ' yönündeki parça', 'ileri'));
-    y.add(new Option(pts[k].ad + ' → ' + pts[(k - 1 + n) % n].ad + ' yönündeki parça', 'geri'));
-    if (onc) y.value = onc;
-  }
-  function yontemSync() {
-    var nokta = $('#pa-yontem').value === 'nokta';
-    $('#pa-edgew').hidden = nokta; $('#pa-pivotw').hidden = !nokta; $('#pa-yonw').hidden = !nokta;
-    split = null; $('#pa-sres').hidden = true; $('#pa-serr').hidden = true; draw();
-  }
-  function doSplit() {
-    var serr = $('#pa-serr');
-    if (!pts || !info) compute(); if (!pts || !info) { serr.textContent = 'Önce geçerli bir parsel girin: köşe listesinde hata var.'; serr.hidden = false; return; }
-    var t = K.parseNumber($('#pa-target').value, { tr: true }), nokta = $('#pa-yontem').value === 'nokta';
-    try { split = nokta ? O.partitionFromPoint(pts, +$('#pa-pivot').value, t, $('#pa-yon').value) : O.partitionParallel(pts, +$('#pa-edge').value, t); serr.hidden = true; }
-    catch (ex) { serr.textContent = ex.message; serr.hidden = false; split = null; $('#pa-sres').hidden = true; draw(); return; }
-    var kv = '<dt>Ayrılan</dt><dd>' + U.num(split.area1, 2) + ' m²</dd><dt>Kalan</dt><dd>' + U.num(split.area2, 2) + ' m²</dd>';
-    if (!nokta) kv += '<dt>Kesim uzaklığı</dt><dd>' + U.num(split.offset, 3) + ' m (taban kenarından dik)</dd>';
-    else kv += '<dt>Yeni noktanın yeri</dt><dd>' + U.esc(split.kenar[0].ad) + ' – ' + U.esc(split.kenar[1].ad) + ' kenarında, ' + U.esc(split.kenar[0].ad) + '\'den ' + U.num(split.oran * O.dist(split.kenar[0], split.kenar[1]), 3) + ' m</dd>';
-    if (split.line.length === 2) kv += '<dt>Kesim uzunluğu</dt><dd>' + U.num(O.dist(split.line[0], split.line[1]), 3) + ' m</dd>';
-    $('#pa-skv').innerHTML = kv;
-    var yeni = nokta ? [split.line[1]] : split.line;
-    $('#pa-new').tBodies[0].innerHTML = yeni.map(function (p, i) {
-      return '<tr><td class="m">Y' + (i + 1) + '</td><td class="num">' + U.num(p.y, 3) + '</td><td class="num">' + U.num(p.x, 3) + '</td><td>' + U.copyBtn(p.y.toFixed(3) + ' ' + p.x.toFixed(3)) + '</td></tr>';
-    }).join('');
-    if (split.multiPart) { serr.textContent = nokta ? 'Kesim doğrusu parselin dışından (girintiden) geçiyor; bu köşeden bu alan ayrılamaz. Başka bir sabit nokta ya da diğer yönü seçin.' : 'Kesim doğrusu parseli ikiden fazla parçaya bölüyor (parsel dışbükey değil). Başka bir taban kenarı seçin ya da ifrazı elle denetleyin.'; serr.hidden = false; }
-    $('#pa-sres').hidden = false; draw();
-  }
-  $('#pa-yontem').addEventListener('change', yontemSync);
-  $('#pa-pivot').addEventListener('change', function () { yonDoldur(); split = null; $('#pa-sres').hidden = true; draw(); });
-
-  $('#pa-run').addEventListener('click', compute);
-  $('#pa-split').addEventListener('click', doSplit);
-  $('#pa-edge').addEventListener('change', function () { split = null; $('#pa-sres').hidden = true; draw(); });
-  $('#pa-ornek').addEventListener('click', function () { $('#pa-in').value = SAMPLE; compute(); });
-  $('#pa-in').value = SAMPLE; compute(); doSplit();
+  // birim değişince açı girdilerini çevir
+  var last = unit();
+  $('#az-unit').addEventListener('change', function () {
+    var now = unit();
+    ['#t1-t', '#ki-a', '#ki-b'].forEach(function (id) {
+      var v = last === 'grad' ? K.parseNumber(String($(id).value).replace(/\s*(grad|gon|g|ᵍ)\s*$/i, '')) : K.parseAngle($(id).value, 'none');
+      if (!isFinite(v)) return;
+      $(id).value = now === 'grad' ? U.num(v * 400 / 360, 4).replace(/\./g, '') : K.fmtDMS(v * 360 / 400, null, 1);
+    });
+    last = now; t2(); t1(); ki();
+  });
+  $('#t2-run').addEventListener('click', t2); $('#t1-run').addEventListener('click', t1); $('#ki-run').addEventListener('click', ki);
+  // örnek değerler tutarlı olsun: t1 girdisini t2 örneğinden türet
+  var r0 = O.secondTask({ y: 487200, x: 4420800 }, { y: 487262.4, x: 4420812.15 });
+  $('#t1-t').value = U.num(r0.grad, 4).replace(/\./g, ''); $('#t1-s').value = U.num(r0.s, 3).replace(/\./g, '');
+  t2(); t1(); ki();
 }};
 
-(function(){var s=document.getElementById('t-parsel');U.subtabs(s);TOOLS['parsel'].init(s);})();
+(function(){var s=document.getElementById('t-azimut');U.subtabs(s);TOOLS['azimut'].init(s);})();
