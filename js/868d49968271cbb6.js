@@ -329,35 +329,6 @@
     secici();
     kutu.addEventListener('change', function (e) { var v = e.target.value; if (!ALTLIK[v]) return; kaydet(v); api.setBasemap(v); });
     map.addControl({ onAdd: function () { return kutu; }, onRemove: function () { kutu.remove(); } }, 'top-left');
-    // Konuma git (sol üst, altlık seçicinin altında): il adı (81 il merkezi, window.TOPO_IL) ya da "enlem, boylam".
-    // Araçlar Ankara ya da Türkiye görünümüyle açılır; kullanıcı buradan çalışacağı yere tek adımda gider.
-    if (opts.konumAra !== false) {
-      var IL = (window.TOPO_IL || (window.TA && window.TA.IL) || []).slice().sort(function (a, b) { return a[1].localeCompare(b[1], 'tr'); });
-      var kid = map.getContainer().id + '-konum';
-      var kk = document.createElement('form');
-      kk.className = 'maplibregl-ctrl harita-konum'; kk.setAttribute('role', 'search');
-      kk.innerHTML = '<label class="harita-konum-lbl" for="' + kid + '">Git</label><input id="' + kid + '" list="' + kid + '-l" autocomplete="off" spellcheck="false" placeholder="İl adı ya da koordinat" title="Bir il adı (ör. Kayseri) ya da koordinat (ör. 38,7225 35,4875) yazıp Enter\'a basın">' +
-        '<datalist id="' + kid + '-l">' + IL.map(function (c) { return '<option value="' + c[1] + '">'; }).join('') + '</datalist>' +
-        '<button type="submit" aria-label="Konuma git" title="Konuma git">→</button><span class="harita-konum-not" role="status" hidden></span>';
-      var knot = kk.querySelector('.harita-konum-not');
-      var trNorm = function (s) { return String(s || '').toLocaleLowerCase('tr-TR').replace(/[âà]/g, 'a').replace(/[îì]/g, 'i').replace(/[ûù]/g, 'u').trim(); };
-      var git = function () {
-        var q = kk.querySelector('input').value, n = trNorm(q); knot.hidden = true;
-        if (!n) return;
-        var sayi = q.match(/-?\d+(?:[.,]\d+)?/g);
-        if (sayi && sayi.length === 2 && !/[a-zçğıöşü]/i.test(q.replace(/[enkbgd°'"\s]/gi, ''))) {
-          var a = parseFloat(sayi[0].replace(',', '.')), b = parseFloat(sayi[1].replace(',', '.'));
-          var lat = a, lon = b; if (Math.abs(a) > 90 || ((a < 35.5 || a > 42.5) && a > 25 && a < 45 && b >= 35.5 && b <= 42.5)) { lat = b; lon = a; } // önce enlem; ilk sayı Türkiye enlemi olamıyorsa (boylam–enlem yazılmışsa) sırayı çevir
-          if (Math.abs(lat) <= 85 && Math.abs(lon) <= 180) { map.jumpTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 15) }); return; }
-        }
-        var il = IL.filter(function (c) { return trNorm(c[1]) === n || c[0] === n; })[0] || IL.filter(function (c) { return trNorm(c[1]).indexOf(n) === 0; })[0];
-        if (il) { map.jumpTo({ center: [il[3], il[2]], zoom: 12 }); return; }
-        knot.textContent = 'Bulunamadı: il adı ya da koordinat yazın'; knot.hidden = false;
-      };
-      kk.addEventListener('submit', function (e) { e.preventDefault(); git(); });
-      kk.querySelector('input').addEventListener('change', function () { var v = trNorm(this.value); if (IL.some(function (c) { return trNorm(c[1]) === v; })) git(); });
-      map.addControl({ onAdd: function () { return kk; }, onRemove: function () { kk.remove(); } }, 'top-left');
-    }
     // Açılış altlığı: kullanıcının son seçimi; yoksa aracın önerdiği (tematik araçlarda Gri), o da yoksa OSM
     if (online) api.setBasemap(kayitli() || (ALTLIK[opts.altlik] ? opts.altlik : 'osm'));
     var _setData = function (id) { kendi[id] = true; };
@@ -395,7 +366,38 @@
         var sk = t.transform.scale, tr = t.transform.translate;
         var cizgi = t.arcs.map(function (a) { var x = 0, y = 0; return a.map(function (p) { x += p[0]; y += p[1]; return [x * sk[0] + tr[0], y * sk[1] + tr[1]]; }); });
         api.setData('_ilsinir', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: cizgi } }] }, { line: '#5F5F5F', width: 0.9, fillOpacity: 0, dash: [3, 2], maxZoom: 10 });
+        if (opts.ilSec) ilSecKur(t, cizgi);
       }).catch(function () { /* il sınırı alınamazsa harita yine çalışır */ });
+    }
+    // İle tıklayıp yakınlaşma (opts.ilSec; Mekânsal Analiz, Haritada Ölç): Türkiye görünümünde iller seçilebilir, üzerine gelince
+    // il adı görünür ve ilin kenarı koyulaşır; tıklayınca harita kayarak o ile yakınlaşır (nüfus haritasındaki gibi). z 7'den sonra kapanır.
+    var IL_SEC_Z = 7;
+    function ilSecKur(t, yay) {
+      var o = t.objects[Object.keys(t.objects)[0]];
+      function halka(ix) { var c = []; ix.forEach(function (i, k) { var a = i < 0 ? yay[~i].slice().reverse() : yay[i]; c = c.concat(k ? a.slice(1) : a); }); return c; }
+      var fc = { type: 'FeatureCollection', features: o.geometries.map(function (g) {
+        var c = g.type === 'Polygon' ? g.arcs.map(halka) : g.arcs.map(function (p) { return p.map(halka); });
+        return { type: 'Feature', properties: { ad: g.properties.il_adi }, geometry: { type: g.type, coordinates: c } };
+      }) };
+      api.setData('_ilsec', fc, { fillOpacity: 0.001, line: 'rgba(0,0,0,0)', width: 0, maxZoom: IL_SEC_Z });
+      var vurgu = null;
+      function vurgula(f) { var ad = f ? f.properties.ad : null; if (ad === vurgu) return; vurgu = ad;
+        api.setData('_ilsec-v', { type: 'FeatureCollection', features: f ? fc.features.filter(function (x) { return x.properties.ad === ad; }) : [] }, { line: '#111111', width: 2.2, fillOpacity: 0.12, maxZoom: IL_SEC_Z }); }
+      function bul(e) { if (api._cizim || map.getZoom() >= IL_SEC_Z || !map.getLayer('_ilsec-fill')) return null; return map.queryRenderedFeatures(e.point, { layers: ['_ilsec-fill'] })[0] || null; }
+      var ip = document.createElement('div'); ip.className = 'harita-ipucu'; ip.hidden = true; el.appendChild(ip);
+      map.on('mousemove', function (e) {
+        var f = bul(e); vurgula(f); map.getCanvas().style.cursor = f ? 'pointer' : (api._cizim ? 'crosshair' : '');
+        if (!f) { ip.hidden = true; return; }
+        ip.innerHTML = '<strong></strong><span>Yakınlaşmak için tıklayın</span>'; ip.firstChild.textContent = f.properties.ad;
+        ip.hidden = false; ip.style.left = Math.max(4, Math.min(el.clientWidth - 224, e.point.x + 14)) + 'px'; ip.style.top = Math.min(el.clientHeight - 60, e.point.y + 14) + 'px';
+      });
+      map.on('mouseout', function () { ip.hidden = true; vurgula(null); });
+      map.on('click', function (e) {
+        var f = bul(e); if (!f) return;
+        var ad = f.properties.ad, tam = fc.features.filter(function (x) { return x.properties.ad === ad; })[0], b = api.bboxOf({ features: [tam] });
+        ip.hidden = true; vurgula(null);
+        map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 30, duration: 800, maxZoom: 11 });
+      });
     }
     // Yer adı etiketleri (DOM): [{ ad, c: [boylam, enlem], tip: 'il'|'ilce', min, max }]; yalnız görünen alandaki ve yakınlaştırma aralığındakiler çizilir
     var etiketler = [], etiketIsaret = [];
@@ -560,71 +562,94 @@
 })();
 
 
-/* Manyetik Sapma Hesaplayıcı arayüzü */
-(window.TOOLS = window.TOOLS || {}).manyetik = { init: function (root) {
+/* Semt Açısı ve Kestirme arayüzü */
+(window.TOOLS = window.TOOLS || {}).azimut = { init: function (root) {
   'use strict';
-  var M = window.TA.M, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  var res = null;
-  var today = new Date(); var iso = today.toISOString().slice(0, 10);
-  $('#mg-date').value = iso < '2025-01-01' ? '2025-01-01' : iso > '2029-12-31' ? '2029-12-31' : iso;
-  function dir(v) { return (v >= 0 ? 'doğu' : 'batı'); }
-  function dm(v) { var p = K.toDMSParts(v, 0); return (v < 0 ? '−' : '') + p.d + '°' + (p.m < 10 ? '0' : '') + p.m + '′'; }
+  var O = window.TA.O, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
+  U.subtabs(root);
+  function unit() { return $('#az-unit').value; }
+  function uSym() { return unit() === 'grad' ? 'ᵍ' : '°'; }
+  function fmtAng(rad) {
+    if (unit() === 'grad') return U.num(rad * 200 / Math.PI, 4) + 'ᵍ';
+    return K.fmtDMS(rad * 180 / Math.PI, null, 1);
+  }
+  function num(id, what) { var v = K.parseNumber($(id).value); if (!isFinite(v)) throw new Error(what + ' sayı olmalı'); return v; }
+  function ang(id, what) {
+    var t = $(id).value, v = unit() === 'grad' ? K.parseNumber(String(t).replace(/\s*(grad|gon|g|ᵍ)\s*$/i, '')) : K.parseAngle(t, 'none');
+    if (!isFinite(v)) throw new Error(what + ' okunamadı' + (unit() === 'deg' ? ' (ondalık ya da 87°45′30″ biçiminde yazın)' : ''));
+    return v;
+  }
+  function guard(errId, fn) { var e = $(errId); try { fn(); e.hidden = true; } catch (x) { e.textContent = x.message; e.hidden = false; } }
 
-  function run() {
-    var err = $('#mg-err');
-    try {
-      var lat = K.parseAngle($('#mg-lat').value, 'lat'), lon = K.parseAngle($('#mg-lon').value, 'lon'), alt = K.parseNumber($('#mg-alt').value || '0');
-      if (!isFinite(lat) || !isFinite(lon)) throw new Error('Enlem ve boylamı ondalık ya da derece-dakika-saniye olarak yazın (yön harfleri: enlemde K/G, boylamda D/B)');
-      if (!isFinite(alt)) throw new Error('Yükseklik metre cinsinden sayı olmalı');
-      var d = $('#mg-date').value; if (!d) throw new Error('Tarih seçin');
-      var date = new Date(d + 'T12:00:00Z');
-      res = M.compute(lat, lon, alt / 1000, date); err.hidden = true;
-    } catch (e) { err.textContent = e.message; err.hidden = false; res = null; U.gecersiz(root, ['#mg-big', '#mg-meta', '#mg-kv', '#mg-conv', '#mg-svg']); return; }
-    var r = res;
-    $('#mg-big').textContent = U.num(Math.abs(r.decl), 2) + '° ' + dir(r.decl);
-    $('#mg-meta').textContent = dm(r.decl) + ' · yıllık değişim ' + (r.declPerYear >= 0 ? '+' : '−') + U.num(Math.abs(r.declPerYear * 60), 1) + '′ · ondalık yıl ' + U.num(r.decimalYear, 3);
-    $('#mg-kv').innerHTML =
-      '<dt>İnklinasyon I</dt><dd>' + U.num(r.incl, 2) + '°</dd>' +
-      '<dt>Toplam şiddet F</dt><dd>' + U.num(r.f, 0) + ' nT</dd>' +
-      '<dt>Yatay bileşen H</dt><dd>' + U.num(r.h, 0) + ' nT</dd>' +
-      '<dt>Düşey bileşen Z</dt><dd>' + U.num(r.z, 0) + ' nT</dd>' +
-      '<dt>γ (3° TM, OM ' + r.tm.cm + '°)</dt><dd>' + U.num(r.tm.convergence, 4) + '° · ' + dm(r.tm.convergence) + '</dd>' +
-      '<dt>γ (UTM ' + r.utm.zone + ')</dt><dd>' + U.num(r.utm.convergence, 4) + '° · ' + dm(r.utm.convergence) + '</dd>' +
-      '<dt>Grid-manyetik açı</dt><dd>TM: ' + U.num(r.tm.gridMag, 3) + '° · UTM: ' + U.num(r.utm.gridMag, 3) + '°</dd>';
-    conv(); draw();
+  function t2() { guard('#t2-err', function () {
+    var A = { y: num('#t2-ay', 'A–Y'), x: num('#t2-ax', 'A–X') }, B = { y: num('#t2-by', 'B–Y'), x: num('#t2-bx', 'B–X') };
+    var r = O.secondTask(A, B);
+    $('#t2-big').textContent = fmtAng(r.rad);
+    $('#t2-meta').textContent = 's_AB = ' + U.num(r.s, 3) + ' m';
+    $('#t2-kv').innerHTML = '<dt>ΔY</dt><dd>' + U.num(r.dy, 3) + ' m</dd><dt>ΔX</dt><dd>' + U.num(r.dx, 3) + ' m</dd>' +
+      '<dt>t_AB</dt><dd>' + U.num(r.grad, 5) + 'ᵍ · ' + K.fmtDMS(r.deg, null, 2) + ' ' + U.copyBtn(unit() === 'grad' ? r.grad.toFixed(5) : r.deg.toFixed(7)) + '</dd>' +
+      '<dt>t_BA</dt><dd>' + U.num((r.grad + 200) % 400, 5) + 'ᵍ · ' + K.fmtDMS((r.deg + 180) % 360, null, 2) + '</dd>' +
+      '<dt>s_AB</dt><dd>' + U.num(r.s, 3) + ' m ' + U.copyBtn(r.s.toFixed(3)) + '</dd>';
+  }); }
+
+  function t1() { guard('#t1-err', function () {
+    var A = { y: num('#t1-ay', 'A–Y'), x: num('#t1-ax', 'A–X') }, t = ang('#t1-t', 'Semt açısı'), s = num('#t1-s', 'Kenar');
+    if (s <= 0) throw new Error('Kenar uzunluğu pozitif olmalı');
+    var B = O.firstTask(A, t, unit(), s);
+    $('#t1-big').textContent = 'Y ' + U.num(B.y, 3) + '   X ' + U.num(B.x, 3);
+    $('#t1-meta').textContent = 'B noktası, A\'dan ' + U.num(s, 3) + ' m';
+    $('#t1-kv').innerHTML = '<dt>ΔY = s·sin t</dt><dd>' + U.num(B.dy, 3) + ' m</dd><dt>ΔX = s·cos t</dt><dd>' + U.num(B.dx, 3) + ' m</dd>' +
+      '<dt>Y_B</dt><dd>' + U.num(B.y, 3) + ' ' + U.copyBtn(B.y.toFixed(3)) + '</dd><dt>X_B</dt><dd>' + U.num(B.x, 3) + ' ' + U.copyBtn(B.x.toFixed(3)) + '</dd>';
+  }); }
+
+  function ki() { guard('#ki-err', function () {
+    var A = { y: num('#ki-ay', 'A–Y'), x: num('#ki-ax', 'A–X') }, B = { y: num('#ki-by', 'B–Y'), x: num('#ki-bx', 'B–X') };
+    var a = ang('#ki-a', 'α'), b = ang('#ki-b', 'β'), side = $('#ki-side').value;
+    var r = O.forwardIntersection(A, B, a, b, unit(), side);
+    $('#ki-big').textContent = 'Y ' + U.num(r.P.y, 3) + '   X ' + U.num(r.P.x, 3);
+    $('#ki-meta').textContent = 'γ = ' + fmtAng(r.gamma) + (r.weak ? ' · zayıf kestirme (γ 30°–150° dışında)' : '');
+    $('#ki-kv').innerHTML = '<dt>s_AP</dt><dd>' + U.num(r.sAP, 3) + ' m</dd><dt>s_BP</dt><dd>' + U.num(r.sBP, 3) + ' m</dd>' +
+      '<dt>t_AP</dt><dd>' + fmtAng(r.tAP) + '</dd><dt>t_BP</dt><dd>' + fmtAng(r.tBP) + '</dd>' +
+      '<dt>Denetim</dt><dd>A ve B\'den bulunan P farkı ' + U.num(r.check * 1000, 3) + ' mm</dd>' +
+      '<dt>P</dt><dd>' + U.copyBtn(r.P.y.toFixed(3) + ' ' + r.P.x.toFixed(3)) + '</dd>';
+    sketch(A, B, r.P);
+  }); }
+
+  function sketch(A, B, P) {
+    var W = 520, H = 300, pad = 40, list = [A, B, P];
+    var ys = list.map(function (p) { return p.y; }), xs = list.map(function (p) { return p.x; });
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys), minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var sc = Math.min((W - 2 * pad) / Math.max(maxY - minY, 1e-9), (H - 2 * pad) / Math.max(maxX - minX, 1e-9));
+    var ox = (W - (maxY - minY) * sc) / 2, oy = (H - (maxX - minX) * sc) / 2;
+    function Q(p) { return [ox + (p.y - minY) * sc, H - oy - (p.x - minX) * sc]; }
+    var a = Q(A), b = Q(B), p = Q(P), h = '';
+    h += '<line x1="' + a[0] + '" y1="' + a[1] + '" x2="' + b[0] + '" y2="' + b[1] + '" stroke="var(--text)" stroke-width="2"/>';
+    h += '<line x1="' + a[0] + '" y1="' + a[1] + '" x2="' + p[0] + '" y2="' + p[1] + '" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="6 4"/>';
+    h += '<line x1="' + b[0] + '" y1="' + b[1] + '" x2="' + p[0] + '" y2="' + p[1] + '" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="6 4"/>';
+    [[a, 'A'], [b, 'B'], [p, 'P']].forEach(function (k) {
+      h += '<circle cx="' + k[0][0] + '" cy="' + k[0][1] + '" r="' + (k[1] === 'P' ? 5 : 4) + '" fill="' + (k[1] === 'P' ? 'var(--amber)' : 'var(--text)') + '" stroke="var(--text)"/>';
+      h += '<text class="svg-strong" x="' + (k[0][0] + 8) + '" y="' + (k[0][1] - 8) + '">' + k[1] + '</text>';
+    });
+    h += '<g transform="translate(' + (W - 24) + ',28)"><line x1="0" y1="14" x2="0" y2="-12" stroke="var(--text)" stroke-width="1.4"/><path d="M0,-16 L-5,-6 L5,-6 Z" fill="var(--text)"/><text class="svg-strong" text-anchor="middle" y="28">K</text></g>';
+    $('#ki-svg').innerHTML = h;
   }
-  function conv() {
-    if (!res) return;
-    var m = K.parseNumber($('#mg-mag').value), out = $('#mg-conv');
-    if (!isFinite(m)) { out.innerHTML = '<dt>Hata</dt><dd>Azimut sayı olmalı (0–360)</dd>'; return; }
-    var c = M.fromMagnetic(((m % 360) + 360) % 360, res, $('#mg-grid').value);
-    out.innerHTML = '<dt>Coğrafi azimut</dt><dd>' + U.num(c.trueAz, 2) + '°</dd><dt>Semt açısı</dt><dd>' + U.num(c.grid, 2) + '° · ' + U.num(c.gridGrad, 3) + 'ᵍ</dd>';
-  }
-  function draw() {
-    var r = res, cx = 210, cy = 210, L = 160;
-    var mx = Math.max(Math.abs(r.decl), Math.abs(r.tm.convergence), 0.5), f = 24 / mx; // abartma katsayısı
-    function ray(angDeg, color, w, dash, label, val, len) {
-      var Ln = len || L, a = angDeg * f * Math.PI / 180, x = cx + Ln * Math.sin(a), y = cy - Ln * Math.cos(a);
-      if (len) { // kısa ışın (grid kuzeyi): etiket çizginin ucunda, coğrafi kuzey çizgisine binmemesi için yana alınır
-        var sag = angDeg >= 0, tx = (x + (sag ? 10 : -10)).toFixed(1), ta = sag ? 'start' : 'end';
-        return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="' + color + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>' +
-          '<text class="svg-strong" text-anchor="' + ta + '" x="' + tx + '" y="' + (y + 4).toFixed(1) + '">' + label + '</text>' + (val ? '<text class="svg-text" text-anchor="' + ta + '" x="' + tx + '" y="' + (y + 18).toFixed(1) + '">' + val + '</text>' : '');
-      }
-      return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="' + color + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>' +
-        '<text class="svg-strong" text-anchor="middle" x="' + (cx + (Ln + 22) * Math.sin(a)).toFixed(1) + '" y="' + (cy - (Ln + 22) * Math.cos(a) + 4).toFixed(1) + '">' + label + '</text>' +
-        (val ? '<text class="svg-text" text-anchor="middle" x="' + (cx + (Ln + 22) * Math.sin(a)).toFixed(1) + '" y="' + (cy - (Ln + 22) * Math.cos(a) + 18).toFixed(1) + '">' + val + '</text>' : '');
-    }
-    var h = '<circle cx="' + cx + '" cy="' + cy + '" r="' + (L - 30) + '" fill="none" stroke="var(--rule)"/>';
-    for (var k = 0; k < 360; k += 30) { var a = k * Math.PI / 180; h += '<line x1="' + (cx + (L - 36) * Math.sin(a)) + '" y1="' + (cy - (L - 36) * Math.cos(a)) + '" x2="' + (cx + (L - 24) * Math.sin(a)) + '" y2="' + (cy - (L - 24) * Math.cos(a)) + '" stroke="var(--rule)"/>'; }
-    h += ray(0, 'var(--text)', 2.2, '', 'Coğrafi K', '');
-    h += ray(r.decl, 'var(--amber)', 2.6, '', 'Manyetik K', 'D = ' + U.num(r.decl, 2) + '°');
-    h += ray(r.tm.convergence, 'var(--muted)', 1.8, '6 4', 'Grid K', 'γ = ' + U.num(r.tm.convergence, 2) + '°', L - 78);
-    h += '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="var(--text)"/>';
-    $('#mg-svg').innerHTML = h;
-  }
-  $('#mg-form').addEventListener('submit', function (e) { e.preventDefault(); run(); });
-  $('#mg-mag').addEventListener('input', conv); $('#mg-grid').addEventListener('change', conv);
-  run();
+
+  // birim değişince açı girdilerini çevir
+  var last = unit();
+  $('#az-unit').addEventListener('change', function () {
+    var now = unit();
+    ['#t1-t', '#ki-a', '#ki-b'].forEach(function (id) {
+      var v = last === 'grad' ? K.parseNumber(String($(id).value).replace(/\s*(grad|gon|g|ᵍ)\s*$/i, '')) : K.parseAngle($(id).value, 'none');
+      if (!isFinite(v)) return;
+      $(id).value = now === 'grad' ? U.num(v * 400 / 360, 4).replace(/\./g, '') : K.fmtDMS(v * 360 / 400, null, 1);
+    });
+    last = now; t2(); t1(); ki();
+  });
+  $('#t2-run').addEventListener('click', t2); $('#t1-run').addEventListener('click', t1); $('#ki-run').addEventListener('click', ki);
+  // örnek değerler tutarlı olsun: t1 girdisini t2 örneğinden türet
+  var r0 = O.secondTask({ y: 487200, x: 4420800 }, { y: 487262.4, x: 4420812.15 });
+  $('#t1-t').value = U.num(r0.grad, 4).replace(/\./g, ''); $('#t1-s').value = U.num(r0.s, 3).replace(/\./g, '');
+  t2(); t1(); ki();
 }};
 
-(function(){var s=document.getElementById('t-manyetik');U.subtabs(s);TOOLS['manyetik'].init(s);})();
+(function(){var s=document.getElementById('t-azimut');U.subtabs(s);TOOLS['azimut'].init(s);})();
