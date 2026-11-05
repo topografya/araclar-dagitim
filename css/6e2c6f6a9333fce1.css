@@ -423,3 +423,12 @@ ul.yazilar{margin:6px 0 0;padding-left:18px}
 ul.yazilar li{margin:4px 0}
 ul.yazilar a{color:var(--text);text-decoration:underline;text-decoration-color:var(--amber);text-decoration-thickness:2px;text-underline-offset:3px;transition:color .15s}
 ul.yazilar a:hover,ul.yazilar a:focus-visible{color:var(--amber-text)}
+/* Konuma git (harita, sol üst) */
+.harita-konum{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--rule);box-shadow:0 1px 3px rgba(0,0,0,.12);padding:3px 4px 3px 8px;font-family:var(--f-display);font-size:12.5px;flex-wrap:wrap;max-width:calc(100vw - 90px)}
+.harita-konum-lbl{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.harita-konum-not{color:var(--amber-text);font-size:11px;padding-right:4px}
+.harita-konum input{width:170px;font:inherit;font-size:12.5px;padding:3px 6px;border:1px solid var(--rule);background:var(--panel);color:var(--text)}
+.harita-konum button{font:inherit;font-size:13px;line-height:1;padding:4px 8px;border:1px solid var(--rule);background:var(--panel);color:var(--text);cursor:pointer}
+.harita-konum button:hover,.harita-konum button:focus-visible{background:var(--amber);color:#1a1a1a}
+@media (max-width:520px){.harita-konum input{width:130px}}
+.btn[aria-pressed="true"]{background:var(--amber);border-color:var(--text);color:#111}

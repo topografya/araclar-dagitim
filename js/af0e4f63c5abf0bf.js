@@ -329,6 +329,35 @@
     secici();
     kutu.addEventListener('change', function (e) { var v = e.target.value; if (!ALTLIK[v]) return; kaydet(v); api.setBasemap(v); });
     map.addControl({ onAdd: function () { return kutu; }, onRemove: function () { kutu.remove(); } }, 'top-left');
+    // Konuma git (sol üst, altlık seçicinin altında): il adı (81 il merkezi, window.TOPO_IL) ya da "enlem, boylam".
+    // Araçlar Ankara ya da Türkiye görünümüyle açılır; kullanıcı buradan çalışacağı yere tek adımda gider.
+    if (opts.konumAra !== false) {
+      var IL = (window.TOPO_IL || (window.TA && window.TA.IL) || []).slice().sort(function (a, b) { return a[1].localeCompare(b[1], 'tr'); });
+      var kid = map.getContainer().id + '-konum';
+      var kk = document.createElement('form');
+      kk.className = 'maplibregl-ctrl harita-konum'; kk.setAttribute('role', 'search');
+      kk.innerHTML = '<label class="harita-konum-lbl" for="' + kid + '">Git</label><input id="' + kid + '" list="' + kid + '-l" autocomplete="off" spellcheck="false" placeholder="İl adı ya da koordinat" title="Bir il adı (ör. Kayseri) ya da koordinat (ör. 38,7225 35,4875) yazıp Enter\'a basın">' +
+        '<datalist id="' + kid + '-l">' + IL.map(function (c) { return '<option value="' + c[1] + '">'; }).join('') + '</datalist>' +
+        '<button type="submit" aria-label="Konuma git" title="Konuma git">→</button><span class="harita-konum-not" role="status" hidden></span>';
+      var knot = kk.querySelector('.harita-konum-not');
+      var trNorm = function (s) { return String(s || '').toLocaleLowerCase('tr-TR').replace(/[âà]/g, 'a').replace(/[îì]/g, 'i').replace(/[ûù]/g, 'u').trim(); };
+      var git = function () {
+        var q = kk.querySelector('input').value, n = trNorm(q); knot.hidden = true;
+        if (!n) return;
+        var sayi = q.match(/-?\d+(?:[.,]\d+)?/g);
+        if (sayi && sayi.length === 2 && !/[a-zçğıöşü]/i.test(q.replace(/[enkbgd°'"\s]/gi, ''))) {
+          var a = parseFloat(sayi[0].replace(',', '.')), b = parseFloat(sayi[1].replace(',', '.'));
+          var lat = a, lon = b; if (Math.abs(a) > 90 || ((a < 35.5 || a > 42.5) && a > 25 && a < 45 && b >= 35.5 && b <= 42.5)) { lat = b; lon = a; } // önce enlem; ilk sayı Türkiye enlemi olamıyorsa (boylam–enlem yazılmışsa) sırayı çevir
+          if (Math.abs(lat) <= 85 && Math.abs(lon) <= 180) { map.jumpTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 15) }); return; }
+        }
+        var il = IL.filter(function (c) { return trNorm(c[1]) === n || c[0] === n; })[0] || IL.filter(function (c) { return trNorm(c[1]).indexOf(n) === 0; })[0];
+        if (il) { map.jumpTo({ center: [il[3], il[2]], zoom: 12 }); return; }
+        knot.textContent = 'Bulunamadı: il adı ya da koordinat yazın'; knot.hidden = false;
+      };
+      kk.addEventListener('submit', function (e) { e.preventDefault(); git(); });
+      kk.querySelector('input').addEventListener('change', function () { var v = trNorm(this.value); if (IL.some(function (c) { return trNorm(c[1]) === v; })) git(); });
+      map.addControl({ onAdd: function () { return kk; }, onRemove: function () { kk.remove(); } }, 'top-left');
+    }
     // Açılış altlığı: kullanıcının son seçimi; yoksa aracın önerdiği (tematik araçlarda Gri), o da yoksa OSM
     if (online) api.setBasemap(kayitli() || (ALTLIK[opts.altlik] ? opts.altlik : 'osm'));
     var _setData = function (id) { kendi[id] = true; };
@@ -530,34 +559,224 @@
   window.HARITA = H;
 })();
 
-
-/* Alan Birim Çevirici arayüzü */
-(window.TOOLS = window.TOOLS || {}).alan = { init: function (root) {
+/* Yükseklik karosu okuyucu (tarayıcı): Terrain Tiles terrarium PNG → Float32Array. window.DEMYUKLE
+ * Karolar AWS Açık Veri kovasından doğrudan istenir (sunucumuza yük yok); aynı karo bir kez indirilir.
+ */
+(function () {
   'use strict';
-  var O = window.TA.O, K = window.TA.K, U = window.U, $ = function (s) { return U.$(s, root); };
-  O.AREA_UNITS.forEach(function (u) { $('#ab-unit').add(new Option(u.label, u.id)); });
-  $('#ab-unit').value = 'm2';
-  function dec(v) { var a = Math.abs(v); return a === 0 ? 0 : a >= 1000 ? 2 : a >= 1 ? 4 : a >= 0.001 ? 6 : 9; }
-  function run() {
-    var v = K.parseNumber($('#ab-val').value, { tr: true }), u = $('#ab-unit').value, err = $('#ab-err');
-    if (!isFinite(v) || v < 0) {
-      err.textContent = 'Sıfır ya da pozitif bir sayı girin (ör. 12.345,67).'; err.hidden = false;
-      // geçersiz girdide önceki sonuç ekranda kalmaz (yanlışlıkla kopyalanmasın)
-      $('#ab-out').tBodies[0].innerHTML = ''; $('#ab-tapu').textContent = '–'; $('#ab-meta').textContent = ''; return;
-    }
-    err.hidden = true;
-    var r = O.convertArea(v, u);
-    $('#ab-out').tBodies[0].innerHTML = O.AREA_UNITS.map(function (x) {
-      var val = r[x.id], d = dec(val);
-      return '<tr' + (x.id === u ? ' class="hl"' : '') + '><td>' + U.esc(x.label) + '</td><td class="num">' + U.num(val, d) + '</td><td>' + U.copyBtn(val.toFixed(d)) + '</td></tr>';
-    }).join('');
-    var b = O.donumBreakdown(Math.round(r.m2 * 100) / 100); // gösterim hassasiyetine yuvarlanıp bölünür (999,999 m² → 1 dönüm 0,00 m²)
-    $('#ab-tapu').textContent = U.num(b.donum, 0) + ' dönüm ' + U.num(b.m2, 2) + ' m²';
-    $('#ab-meta').textContent = U.num(r.m2, 2) + ' m² · ' + U.num(r.ha, 4) + ' ha';
+  var URL_SABLON = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+  var ATIF = 'Yükseklik: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a> (Mapzen; ' +
+    '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">kaynaklar</a>: EU-DEM © Copernicus, SRTM ve GMTED2010 USGS, ETOPO1 NOAA)';
+  // İndirilen türev ürünlere yazılan atıf (Tilezen/joerd atıf koşulları; Claude denetimi D3-27)
+  var ATIF_METIN = 'Yükseklik verisi: Terrain Tiles (Mapzen; Amazon Web Services Açık Veri Kaydı). Kaynaklar: EU-DEM - Produced using Copernicus data and information funded by the European Union - EU-DEM layers; ' +
+    'SRTM ve GMTED2010 - U.S. Geological Survey; ETOPO1 - NOAA National Centers for Environmental Information. Ayrıntı: https://github.com/tilezen/joerd/blob/master/docs/attribution.md. Türetilmiş ürün: topografya.com.tr';
+  function ascii(t) { var m = { 'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S', 'ü': 'u', 'Ü': 'U', 'â': 'a', 'î': 'i', 'û': 'u' }; return t.replace(/[^\x20-\x7E]/g, function (c) { return m[c] || '?'; }); }
+  function xmlEsc(t) { return t.replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  // ad uzantısına göre atıf ekler: GeoJSON "attribution" üyesi, KML <description>, DXF 999 açıklama satırları, ZIP içine BENIOKU.txt
+  function atifEkle(ad, veri) {
+    var F = window.TA.F, enc = new TextEncoder(), dec = new TextDecoder('utf-8');
+    if (/\.(geo)?json$/i.test(ad)) { var o = JSON.parse(typeof veri === 'string' ? veri : dec.decode(veri)); o.attribution = ATIF_METIN; return JSON.stringify(o); }
+    if (/\.kml$/i.test(ad)) { var k = typeof veri === 'string' ? veri : dec.decode(veri); return k.replace(/<Document>/, '<Document><description>' + xmlEsc(ATIF_METIN) + '</description>'); }
+    if (/\.dxf$/i.test(ad)) { var on = enc.encode('999\r\n' + ascii(ATIF_METIN).replace(/(.{1,240})(\s|$)/g, '$1\r\n999\r\n').replace(/\r\n999\r\n$/, '\r\n')), u = typeof veri === 'string' ? enc.encode(veri) : veri, r = new Uint8Array(on.length + u.length); r.set(on); r.set(u, on.length); return r; }
+    if (/\.zip$/i.test(ad)) { var z = F.unzip(veri); z['BENIOKU.txt'] = enc.encode(ATIF_METIN.replace(/\. /g, '.\r\n') + '\r\n'); return F.zip(z); }
+    return veri;
   }
-  $('#ab-val').addEventListener('input', run); $('#ab-unit').addEventListener('change', run);
-  $('#ab-form').addEventListener('submit', function (e) { e.preventDefault(); run(); });
-  run();
+  var onbellek = {}, kuyruk = [], aktif = 0, ES = 8, sayac = { istenen: 0, gelen: 0 };
+  function sira() {
+    while (aktif < ES && kuyruk.length) {
+      var is = kuyruk.shift(); aktif++;
+      is().then(function () { aktif--; sira(); }, function () { aktif--; sira(); });
+    }
+  }
+  function cozumle(blob) {
+    return createImageBitmap(blob).then(function (bm) {
+      var c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(256, 256) : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
+      var x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bm, 0, 0);
+      return window.TA.DEM.decodeTerrarium(x.getImageData(0, 0, 256, 256).data);
+    });
+  }
+  function getTile(z, x, y) {
+    var k = z + '/' + x + '/' + y;
+    if (!onbellek[k]) {
+      sayac.istenen++;
+      onbellek[k] = new Promise(function (res, rej) {
+        kuyruk.push(function () {
+          return fetch(URL_SABLON.replace('{z}', z).replace('{x}', x).replace('{y}', y), { mode: 'cors' })
+            .then(function (r) { if (r.status === 404) return null; if (!r.ok) throw new Error('Yükseklik karosu alınamadı (' + r.status + ')'); return r.blob().then(cozumle); })
+            .then(function (t) { sayac.gelen++; if (D.ilerleme) D.ilerleme(sayac); res(t); }, function (e) { delete onbellek[k]; sayac.gelen++; if (D.ilerleme) D.ilerleme(sayac); rej(e); });
+        });
+        sira();
+      });
+    }
+    return onbellek[k];
+  }
+  var D = {
+    ATIF: ATIF, ATIF_METIN: ATIF_METIN, ATIF_ASCII: ascii(ATIF_METIN), atifEkle: atifEkle, getTile: getTile, ilerleme: null,
+    // bbox için mozaik; maxPx ile yakınlık sınırlanır. Önizleme ortamında dış kaynak kapalıysa anlaşılır hata verir.
+    mozaik: function (bbox, maxPx, z) {
+      var DEM = window.TA.DEM; sayac.istenen = 0; sayac.gelen = 0;
+      var zz = z || DEM.zoomSec(bbox, maxPx || 1.5e6, 64);
+      return DEM.mozaik(bbox, zz, getTile).then(function (m) {
+        var bos = 0; for (var i = 0; i < m.data.length; i += 97) if (!isFinite(m.data[i])) bos++;
+        if (bos > m.data.length / 97 * 0.98) throw new Error(window.TOPO_BASEMAP === 'offline' ? 'Yükseklik verisi bu önizlemede yüklenemiyor (dış kaynaklar kapalı); sitede ve yerel pakette çalışır.' : 'Yükseklik verisi alınamadı; bağlantınızı denetleyip yeniden deneyin.');
+        return m;
+      });
+    }
+  };
+  window.DEMYUKLE = D;
+})();
+
+/* Arazi araçları ortak arayüz yardımcıları. window.ARAZI */
+(function () {
+  'use strict';
+  var A = {};
+  // Alan seçimi: [data-alan="cokgen"] çokgen çiz, [data-alan="gorunur"] görünür alan, [data-alan="temizle"].
+  // onSec({ ring: [[lon, lat]…] kapalı, bbox }) çağrılır.
+  A.alanSecici = function (api, root, onSec, opts) {
+    opts = opts || {};
+    var U = window.U, durum = { ring: null };
+    var dr = window.HARITA.drawer(api, function (f) {
+      basili(null); dr.setMode(null);
+      sec(f.geometry.coordinates[0]);
+    });
+    function basili(m) { U.$$('[data-alan]', root).forEach(function (b) { if (b.dataset.alan === 'cokgen') b.setAttribute('aria-pressed', m === 'cokgen' ? 'true' : 'false'); }); }
+    function sec(ring) {
+      var b = [Infinity, Infinity, -Infinity, -Infinity]; ring.forEach(function (c) { b[0] = Math.min(b[0], c[0]); b[1] = Math.min(b[1], c[1]); b[2] = Math.max(b[2], c[0]); b[3] = Math.max(b[3], c[1]); });
+      durum.ring = ring; durum.bbox = b;
+      api.setData('alan', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }] }, { fillOpacity: 0, width: 2, dash: [3, 2] });
+      onSec(durum);
+    }
+    U.$$('[data-alan]', root).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var t = b.dataset.alan;
+        if (t === 'cokgen') { var acik = dr.mode === 'Polygon'; dr.setMode(acik ? null : 'Polygon'); basili(acik ? null : 'cokgen'); }
+        else if (t === 'gorunur') {
+          dr.setMode(null); basili(null);
+          var bb = api.map.getBounds(), w = bb.getWest(), s = bb.getSouth(), e = bb.getEast(), n = bb.getNorth();
+          // kenarlardan %4 içeri: seçim çerçevesi görünsün
+          var dx = (e - w) * 0.04, dy = (n - s) * 0.04; w += dx; e -= dx; s += dy; n -= dy;
+          sec([[w, s], [e, s], [e, n], [w, n], [w, s]]);
+        } else if (t === 'temizle') { dr.setMode(null); basili(null); durum.ring = null; api.remove('alan'); if (opts.onTemizle) opts.onTemizle(); }
+      });
+    });
+    durum.sec = sec; durum.drawer = dr;
+    return durum;
+  };
+  // Mozaik ızgarasından renkli görüntü (data URL). renk(k) → [r, g, b, a] ya da null (saydam)
+  A.resim = function (m, renk) {
+    var c = document.createElement('canvas'); c.width = m.w; c.height = m.h;
+    var x = c.getContext('2d'), im = x.createImageData(m.w, m.h), d = im.data;
+    for (var k = 0; k < m.w * m.h; k++) { var r = renk(k); if (!r) continue; d[k * 4] = r[0]; d[k * 4 + 1] = r[1]; d[k * 4 + 2] = r[2]; d[k * 4 + 3] = r[3] == null ? 255 : r[3]; }
+    x.putImageData(im, 0, 0);
+    return c.toDataURL('image/png');
+  };
+  A.hex = function (h) { var n = parseInt(h.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
+  // Alan için uygun 3° TM orta meridyeni
+  A.tmCm = function (lon) { var cms = window.TA.K.TM_CMS, b = cms[0]; cms.forEach(function (c) { if (Math.abs(lon - c) < Math.abs(lon - b)) b = c; }); return b; };
+  A.ilerleme = function (el) { window.DEMYUKLE.ilerleme = function (s) { el.textContent = 'Yükseklik verisi yükleniyor: ' + s.gelen + ' / ' + s.istenen + ' karo'; }; };
+  A.alanYaz = function (m2) { var U = window.U; return m2 >= 1e6 ? U.num(m2 / 1e6, 3) + ' km²' : U.num(m2 / 1e4, 2) + ' ha'; };
+  // Çokgen için en çok alan (km²): veri ~15 m piksel; büyük alanlarda yakınlık düşer, uyarı verilir
+  A.MAX_KM2 = 2500;
+  window.ARAZI = A;
+})();
+
+/* Görünürlük Analizi arayüzü */
+(window.TOOLS = window.TOOLS || {}).gorunurluk = { init: function (root) {
+  'use strict';
+  var DEM = window.TA.DEM, GT = window.TA.GT, GD = window.TA.GD, K = window.TA.K, U = window.U, AR = window.ARAZI, Y = window.DEMYUKLE, $ = function (s) { return U.$(s, root); };
+  var api = window.HARITA.create($('#gr-map'), { center: [32.85, 39.92], zoom: 11 });
+  api.saydamlik(['gr-ras']); // tematik katman opaklığı
+  api.ekAtif(Y.ATIF);
+  var mod = 'alan', st = { A: null, B: null, vs: null, m: null, hat: null };
+  function err(m) { var e = $('#gr-err'); e.textContent = m || ''; e.hidden = !m; }
+  AR.ilerleme($('#gr-durum'));
+  function sayi(id, ad, min, max) { var v = K.parseNumber($(id).value); if (!isFinite(v) || v < min || v > max) throw new Error(ad + ' ' + min + ' ile ' + max + ' arasında olmalı'); return v; }
+  function temizle() { st.A = st.B = null; st.vs = st.hat = null; ['gr-ras', 'gr-nok', 'gr-cizgi', 'gr-engel'].forEach(api.remove); $('#gr-exp').hidden = true; $('#gr-fig').hidden = true; $('#gr-kv').innerHTML = ''; $('#gr-big').textContent = '—'; $('#gr-meta').textContent = ''; }
+  U.$('.subtabs[data-group="gr"]', root).addEventListener('tabchange', function (e) {
+    mod = e.detail; temizle(); err('');
+    $('#gr-rw').hidden = mod !== 'alan'; $('#gr-leg').hidden = mod !== 'alan';
+    $('#gr-ht').value = mod === 'alan' ? '0' : '1,70';
+    $('#gr-ipucu').textContent = mod === 'alan' ? 'Haritada bakış noktasına tıklayın.' : 'Haritada önce gözlemci (A), sonra hedef (B) noktasına tıklayın.';
+  });
+  function noktalar() {
+    var f = []; if (st.A) f.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: st.A } }); if (st.B) f.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: st.B } });
+    api.setData('gr-nok', { type: 'FeatureCollection', features: f }, { radius: 7, color: '#F2A900' });
+  }
+  api.ready.then(function () {
+    api.map.getCanvas().style.cursor = 'crosshair';
+    api.map.on('click', function (e) {
+      var p = [e.lngLat.lng, e.lngLat.lat]; err('');
+      if (mod === 'alan') { st.A = p; noktalar(); alanHesapla(); }
+      else { if (!st.A || st.B) { temizle(); st.A = p; } else st.B = p; noktalar(); if (st.B) hatHesapla(); }
+    });
+  });
+  ['#gr-ho', '#gr-ht', '#gr-r', '#gr-k'].forEach(function (id) { $(id).addEventListener('change', function () { if (mod === 'alan' && st.A) alanHesapla(); if (mod === 'hat' && st.B) hatHesapla(); }); });
+  function alanHesapla() {
+    var ho, ht, r, k;
+    try { ho = sayi('#gr-ho', 'Gözlemci yüksekliği', 0, 1000); ht = sayi('#gr-ht', 'Hedef yüksekliği', 0, 1000); r = sayi('#gr-r', 'Yarıçap', 100, 30000); k = sayi('#gr-k', 'Kırılma katsayısı', -1, 1); } catch (e) { err(e.message); return; }
+    var A = st.A, dLat = r / 111132, dLon = r / (111320 * Math.cos(A[1] * Math.PI / 180));
+    Y.mozaik([A[0] - dLon, A[1] - dLat, A[0] + dLon, A[1] + dLat], 1.6e6).then(function (m) {
+      $('#gr-durum').textContent = '';
+      var vs = DEM.gorunurluk(m, A[0], A[1], ho, ht, r, k);
+      st.m = m; st.vs = vs;
+      api.setImage('gr-ras', AR.resim(m, function (q) { var v = vs.grid[q]; return v === 1 ? [46, 158, 91, 170] : v === 0 ? [40, 40, 40, 120] : v === 2 ? [230, 160, 20, 150] : null; }), DEM.koseler(m), 1);
+      $('#gr-eb').textContent = 'Görünür alan';
+      $('#gr-big').textContent = AR.alanYaz(vs.gorunurAlan) + ' · %' + U.num(vs.gorunurAlan / vs.toplamAlan * 100, 1);
+      $('#gr-belirsiz').hidden = !(vs.belirsizAlan > 0);
+      $('#gr-meta').textContent = U.num(r / 1000, 1) + ' km yarıçap · karo pikseli ≈ ' + U.num(DEM.pikselBoyu(A[1], m.z), 0) + ' m' + (m.eksik ? ' · ' + m.eksik + ' karo eksik' : '');
+      var ufuk = Math.sqrt(2 * 6371000 * ho / (1 - k));
+      $('#gr-kv').innerHTML = '<dt>Bakış noktası</dt><dd>' + U.num(A[1], 6) + '°, ' + U.num(A[0], 6) + '° · zemin ' + U.num(vs.gozKotu - ho, 1) + ' m · göz ' + U.num(vs.gozKotu, 1) + ' m</dd>' +
+        '<dt>İncelenen alan</dt><dd>' + AR.alanYaz(vs.toplamAlan) + '</dd><dt>Düz arazide ufuk</dt><dd>≈ ' + U.num(ufuk / 1000, 2) + ' km (' + U.num(ho, 1) + ' m göz yüksekliği)</dd>';
+      $('#gr-exp').hidden = false; $('#gr-tif').hidden = false; $('#gr-csv').hidden = true;
+    }).catch(function (e) { $('#gr-durum').textContent = ''; err(e.message); });
+  }
+  function hatHesapla() {
+    var ho, ht, k;
+    try { ho = sayi('#gr-ho', 'Gözlemci yüksekliği', 0, 1000); ht = sayi('#gr-ht', 'Hedef yüksekliği', 0, 1000); k = sayi('#gr-k', 'Kırılma katsayısı', -1, 1); } catch (e) { err(e.message); return; }
+    var A = st.A, B = st.B, L = GD.inverse(A[1], A[0], B[1], B[0]).s;
+    if (L > 100000) { err('A ile B arası 100 km\'den uzun.'); return; }
+    var pay = 0.003;
+    Y.mozaik([Math.min(A[0], B[0]) - pay, Math.min(A[1], B[1]) - pay, Math.max(A[0], B[0]) + pay, Math.max(A[1], B[1]) + pay], 2.5e6).then(function (m) {
+      $('#gr-durum').textContent = '';
+      var adim = Math.max(2, Math.min(DEM.pikselBoyu(A[1], m.z) / 2, L / 1500));
+      var g = DEM.gorusHatti(m, A, B, ho, ht, adim, k); st.hat = g;
+      api.setData('gr-cizgi', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [A, B] } }] }, { width: 3, line: g.gorunur === true ? '#2E9E5B' : g.gorunur === false ? '#B3261E' : '#E0A100', dash: g.gorunur === true ? [1, 0] : [2, 1.5] });
+      if (g.engel) api.setData('gr-engel', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [g.engel.lon, g.engel.lat] } }] }, { radius: 7, color: '#B3261E' }); else api.remove('gr-engel');
+      $('#gr-eb').textContent = 'Görüş hattı';
+      $('#gr-big').textContent = g.gorunur === true ? 'B noktası görünür' : g.gorunur === false ? 'Görüş engelleniyor' : 'Belirlenemedi: kesitte yükseklik verisi eksik';
+      $('#gr-meta').textContent = U.num(g.uzunluk / 1000, 3) + ' km · karo pikseli ≈ ' + U.num(DEM.pikselBoyu(A[1], m.z), 0) + ' m';
+      $('#gr-kv').innerHTML = '<dt>Göz kotu (A)</dt><dd>' + U.num(g.gozKotu, 1) + ' m</dd><dt>Hedef kotu (B)</dt><dd>' + U.num(g.hedefKotu, 1) + ' m</dd>' +
+        (g.engel ? '<dt>İlk engel</dt><dd>A\'dan ' + U.num(g.engel.d, 0) + ' m · arazi ' + U.num(g.engel.z, 1) + ' m · görüş çizgisini ≈ ' + U.num(g.engel.asim, 1) + ' m aşıyor</dd>' : '') +
+        (g.eksik ? '<dt>Eksik yükseklik verisi</dt><dd>Kesit örneklerinin %' + U.num(g.eksik.oran * 100, 1) + '\'inde veri yok (ilk boşluk A\'dan ≈ ' + U.num(g.eksik.ilkUzaklik, 0) + ' m); ' + (g.engel ? 'bilinen arazideki engel nedeniyle sonuç yine de görünmez.' : 'bilinmeyen arazi açık hat sayılmadığından görünürlük kanıtlanamadı.') + '</dd>' : '') +
+        '<dt>Eğrilik + kırılma (B\'de)</dt><dd>' + U.num(DEM.egrilikDuzeltme(g.uzunluk, k), 2) + ' m</dd>';
+      grafik(g, k); $('#gr-fig').hidden = false; $('#gr-exp').hidden = false; $('#gr-tif').hidden = true; $('#gr-csv').hidden = false;
+    }).catch(function (e) { $('#gr-durum').textContent = ''; err(e.message); });
+  }
+  function grafik(g, k) {
+    var W = 720, H = 260, pl = 56, pr = 14, pt = 14, pb = 30, pts = g.profil.filter(function (p) { return isFinite(p.z); });
+    var zz = pts.map(function (p) { return p.z - DEM.egrilikDuzeltme(p.d, k); }).concat([g.gozKotu, g.hedefKotu - DEM.egrilikDuzeltme(g.uzunluk, k)]);
+    var zmin = Math.min.apply(null, zz), zmax = Math.max.apply(null, zz), dz = Math.max(5, zmax - zmin); zmin -= dz * 0.08; zmax += dz * 0.08;
+    var X = function (d) { return pl + (W - pl - pr) * d / g.uzunluk; }, Yf = function (z) { return H - pb - (H - pt - pb) * (z - zmin) / (zmax - zmin); };
+    var h = '', ad = [1, 2, 5, 10, 20, 50, 100, 200, 500].filter(function (s) { return (zmax - zmin) / s <= 6; })[0] || 1000;
+    for (var v = Math.ceil(zmin / ad) * ad; v <= zmax; v += ad) h += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + Yf(v).toFixed(1) + '" y2="' + Yf(v).toFixed(1) + '" stroke="var(--rule)"/><text class="svg-text" x="' + (pl - 6) + '" y="' + (Yf(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '</text>';
+    var yol = pts.map(function (p, i) { return (i ? 'L' : 'M') + X(p.d).toFixed(1) + ',' + Yf(p.z - DEM.egrilikDuzeltme(p.d, k)).toFixed(1); }).join('');
+    h += '<path d="' + yol + 'L' + X(g.uzunluk) + ',' + (H - pb) + 'L' + pl + ',' + (H - pb) + 'Z" fill="#E9DCC6" stroke="#8A4B00" stroke-width="1.2"/>';
+    var zB = g.hedefKotu - DEM.egrilikDuzeltme(g.uzunluk, k);
+    h += '<line x1="' + X(0) + '" y1="' + Yf(g.gozKotu).toFixed(1) + '" x2="' + X(g.uzunluk) + '" y2="' + Yf(zB).toFixed(1) + '" stroke="var(--text)" stroke-dasharray="6 4" stroke-width="1.4"/>';
+    pts.forEach(function (p, i) { if (i === 0) return; var zl = g.gozKotu + (zB - g.gozKotu) * p.d / g.uzunluk, zc = p.z - DEM.egrilikDuzeltme(p.d, k); if (zc > zl && p.d < g.uzunluk) h += '<line x1="' + X(p.d).toFixed(1) + '" x2="' + X(p.d).toFixed(1) + '" y1="' + Yf(zl).toFixed(1) + '" y2="' + Yf(zc).toFixed(1) + '" stroke="#B3261E" stroke-width="2"/>'; });
+    h += '<circle cx="' + X(0) + '" cy="' + Yf(g.gozKotu).toFixed(1) + '" r="5" fill="#F2A900" stroke="var(--text)"/><text class="svg-strong" x="' + (X(0) + 8) + '" y="' + (Yf(g.gozKotu) - 8).toFixed(1) + '">A</text>';
+    h += '<circle cx="' + X(g.uzunluk) + '" cy="' + Yf(zB).toFixed(1) + '" r="5" fill="#F2A900" stroke="var(--text)"/><text class="svg-strong" x="' + (X(g.uzunluk) - 16) + '" y="' + (Yf(zB) - 8).toFixed(1) + '">B</text>';
+    h += '<text class="svg-text" x="' + pl + '" y="' + (H - 8) + '">0</text><text class="svg-text" x="' + (W - pr) + '" y="' + (H - 8) + '" text-anchor="end">' + U.num(g.uzunluk / 1000, 2) + ' km</text>';
+    $('#gr-svg').innerHTML = h;
+  }
+  $('#gr-tif').addEventListener('click', function () {
+    if (!st.vs) return; var m = st.m, g = DEM.georef(m);
+    U.download('gorunurluk.tif', GT.yaz({ w: m.w, h: m.h, data: st.vs.grid, x0: g.x0, y0: g.y0, px: g.px, py: g.px, epsg: 3857, nodata: 255, aciklama: 'Gorunurluk: 1 gorunur, 0 gorunmez, 2 belirsiz (yukseklik verisi eksik)', telif: window.DEMYUKLE.ATIF_ASCII }), 'image/tiff');
+  });
+  $('#gr-csv').addEventListener('click', function () {
+    var g = st.hat; if (!g) return;
+    U.download('gorus_hatti.csv', U.csvRapor([['mesafe_m', 'enlem', 'boylam', 'arazi_kot_m', 'gorus_cizgisi_kot_m']].concat(g.profil.map(function (p) { return [p.d.toFixed(2), p.lat.toFixed(7), p.lon.toFixed(7), isFinite(p.z) ? p.z.toFixed(2) : '', p.gorusKotu != null ? p.gorusKotu.toFixed(2) : '']; }))), 'text/csv');
+  });
 }};
 
-(function(){var s=document.getElementById('t-alan');U.subtabs(s);TOOLS['alan'].init(s);})();
+(function(){var s=document.getElementById('t-gorunurluk');U.subtabs(s);TOOLS['gorunurluk'].init(s);})();
